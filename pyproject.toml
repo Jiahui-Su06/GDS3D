@@ -1,0 +1,15 @@
+[project]
+name = "draw3d"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "gdstk>=1.0.0",
+    "mapbox-earcut>=2.0.0",
+    "pyvista>=0.47.1",
+]
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
