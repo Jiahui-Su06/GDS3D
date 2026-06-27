@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 import numpy as np
 import gdstk
 import pyvista as pv
@@ -8,7 +9,7 @@ import mapbox_earcut as earcut
 
 
 # 读取 GDS 文件
-GDS_FILE = Path(r"E:\VSCode\Draw3D\docs\AWG_3.2nm_1.gds")
+GDS_FILE = Path(__file__).resolve().parent.parent / "docs" / "AWG_3.2nm_1.gds"
 
 # 选择 GDS 文件需要读取的层
 LAYER = 4
@@ -21,11 +22,7 @@ z1 = 15
 
 
 # ========= 1) 单个 polygon -> 先三角化再挤出 =========
-def polygon_to_extruded_mesh(
-    xy: np.ndarray,
-    z0: float,
-    z1: float
-) -> pv.PolyData:
+def polygon_to_extruded_mesh(xy: np.ndarray, z0: float, z1: float) -> pv.PolyData:
     xy = np.asarray(xy, dtype=np.float64)
 
     # 去掉首尾重复点
@@ -49,13 +46,11 @@ def polygon_to_extruded_mesh(
     tri_idx = tri_idx.reshape(-1, 3)
 
     # PyVista faces: [3, i, j, k, 3, i, j, k, ...]
-    faces = np.hstack(
-        [np.array([3, a, b, c], dtype=np.int64) for a, b, c in tri_idx]
-    )
+    faces = np.hstack([np.array([3, a, b, c], dtype=np.int64) for a, b, c in tri_idx])
 
     poly = pv.PolyData(points3d, faces=faces).clean()
     mesh = poly.extrude((0, 0, z1 - z0), capping=True).clean()
-    return mesh
+    return cast(pv.PolyData, mesh)
 
 
 # ========= 2) 读取 GDS =========
@@ -67,9 +62,10 @@ top_cells = lib.top_level()
 if not top_cells:
     raise RuntimeError("No top-level cell found in GDS")
 
-top = None
+top: gdstk.Cell | None = None
+
 for cell in top_cells:
-    if cell.name == "AWG":
+    if isinstance(cell, gdstk.Cell) and cell.name == "AWG":
         top = cell
         break
 
@@ -132,11 +128,6 @@ for m in meshes[1:]:
 sin_mesh = sin_mesh.clean()
 
 
-# # ========= 5) 根据器件范围自动生成基底/包层大小 =========
-# all_xy_concat = np.vstack(all_xy)
-# xmin, ymin = all_xy_concat.min(axis=0)
-# xmax, ymax = all_xy_concat.max(axis=0)
-
 # pad = 30.0
 xmin = -200
 xmax = 610
@@ -156,7 +147,7 @@ clad_top = 20
 
 
 # ========= 6) 绘图模块 =========
-pl = pv.Plotter()
+pl: pv.Plotter = pv.Plotter()
 
 # 颜色定义（论文风格）
 colors = {
@@ -178,7 +169,7 @@ pl.add_mesh(
     substrate_Si,
     color=colors["si_substrate"],
     opacity=opacity["si_substrate"],
-    show_edges=False,
+    ambient=0.4,
 )
 
 # 绘制 BOX 层
@@ -187,7 +178,7 @@ pl.add_mesh(
     BOX_SiO2,
     color=colors["sio2_box"],
     opacity=opacity["sio2_box"],
-    show_edges=False,
+    ambient=0.4,
 )
 
 # 绘制 AWG 器件主体（氮化硅层）
@@ -196,8 +187,7 @@ pl.add_mesh(
     color=colors["sin_core"],
     opacity=opacity["sin_core"],
     show_edges=False,
-    smooth_shading=True,
-    specular=0.03,
+    ambient=0.4,
 )
 
 # 绘制覆盖层 SiO2
@@ -206,10 +196,13 @@ pl.add_mesh(
     clad_SiO2,
     color=colors["sio2_clad"],
     opacity=opacity["sio2_clad"],
-    show_edges=False,
+    ambient=0.4,
 )
 
-def make_tapered_fiber_xbackward(tip_point=(0, 0, 0), r=0.5, L_cone=2.0, L_cyl=4.0, resolution=80):
+
+def make_tapered_fiber_xbackward(
+    tip_point=(0, 0, 0), r=0.5, L_cone=2.0, L_cyl=4.0, resolution=80
+):
     """
     生成一个沿 x 负方向的锥形光纤（圆锥 + 圆柱），并以圆锥尖端为定位点。
 
@@ -265,7 +258,10 @@ def make_tapered_fiber_xbackward(tip_point=(0, 0, 0), r=0.5, L_cone=2.0, L_cyl=4
     fiber = cone.merge(cyl)
     return fiber, cone, cyl
 
-def make_tapered_fiber_xforward(tip_point=(0, 0, 0), r=0.5, L_cone=2.0, L_cyl=4.0, resolution=80):
+
+def make_tapered_fiber_xforward(
+    tip_point=(0, 0, 0), r=0.5, L_cone=2.0, L_cyl=4.0, resolution=80
+):
     """
     生成一个沿 x 正方向的锥形光纤（圆锥 + 圆柱），并以圆锥尖端为定位点。
 
