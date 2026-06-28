@@ -50,6 +50,9 @@ class PropertyPanel(QScrollArea):
 
         self._add_text("Name", "name", obj.name)
         self._add_color("Color", "color", obj.color)
+        self._add_float(
+            "Brightness", "brightness", obj.brightness, 0.0, 2.0, step=0.05
+        )
         self._add_float("Opacity", "opacity", obj.opacity, 0.0, 1.0, step=0.05)
 
         if isinstance(obj, GdsLayerObject):
@@ -62,16 +65,16 @@ class PropertyPanel(QScrollArea):
             self._add_float("Z Max", "z_max", obj.z_max, -1_000_000.0, 1_000_000.0)
         elif isinstance(obj, BaseplateObject):
             self._add_float(
-                "Min X", "min_x", obj.bounds.min_x, -1_000_000.0, 1_000_000.0
+                "X Min", "min_x", obj.bounds.min_x, -1_000_000.0, 1_000_000.0
             )
             self._add_float(
-                "Min Y", "min_y", obj.bounds.min_y, -1_000_000.0, 1_000_000.0
+                "X Max", "max_x", obj.bounds.max_x, -1_000_000.0, 1_000_000.0
             )
             self._add_float(
-                "Max X", "max_x", obj.bounds.max_x, -1_000_000.0, 1_000_000.0
+                "Y Min", "min_y", obj.bounds.min_y, -1_000_000.0, 1_000_000.0
             )
             self._add_float(
-                "Max Y", "max_y", obj.bounds.max_y, -1_000_000.0, 1_000_000.0
+                "Y Max", "max_y", obj.bounds.max_y, -1_000_000.0, 1_000_000.0
             )
             self._add_float("Z Min", "z_min", obj.z_min, -1_000_000.0, 1_000_000.0)
             self._add_float("Z Max", "z_max", obj.z_max, -1_000_000.0, 1_000_000.0)
@@ -153,10 +156,10 @@ class PropertyPanel(QScrollArea):
         self._emit(field, value)
 
     def _add_bounds_readonly(self, obj: GdsLayerObject) -> None:
-        self._add_readonly("Min X", f"{obj.bounds.min_x:.4f}")
-        self._add_readonly("Min Y", f"{obj.bounds.min_y:.4f}")
-        self._add_readonly("Max X", f"{obj.bounds.max_x:.4f}")
-        self._add_readonly("Max Y", f"{obj.bounds.max_y:.4f}")
+        self._add_readonly("X Min", f"{obj.bounds.min_x:.4f}")
+        self._add_readonly("X Max", f"{obj.bounds.max_x:.4f}")
+        self._add_readonly("Y Min", f"{obj.bounds.min_y:.4f}")
+        self._add_readonly("Y Max", f"{obj.bounds.max_y:.4f}")
 
     def _with_reset(self, editor: QWidget, field: str) -> QWidget:
         wrapper = QWidget()

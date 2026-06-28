@@ -198,6 +198,12 @@ class MainWindow(QMainWindow):
         if field == "color":
             obj.color = str(value)
             return
+        if field == "brightness":
+            brightness = float(value)
+            if not 0.0 <= brightness <= 2.0:
+                raise ValueError("brightness must be between 0 and 2")
+            obj.brightness = brightness
+            return
         if field == "opacity":
             opacity = float(value)
             if not 0.0 <= opacity <= 1.0:
@@ -258,7 +264,7 @@ class MainWindow(QMainWindow):
             self._render_object(obj)
             return
 
-        if field in {"color", "opacity", "z_min", "z_max", "visible"}:
+        if field in {"color", "brightness", "opacity", "z_min", "z_max", "visible"}:
             self.viewport.update_actor(obj)
             self.viewport.highlight_object(obj.id)
 

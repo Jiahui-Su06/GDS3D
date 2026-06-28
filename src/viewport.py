@@ -30,7 +30,7 @@ class Viewport(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.plotter)
 
-        self.plotter.set_background("#20252B")
+        self.plotter.set_background("#FFFFFF")
         self.plotter.add_axes()
 
     def add_or_update(
@@ -49,8 +49,9 @@ class Viewport(QWidget):
             color=obj.color,
             opacity=obj.opacity,
             show_edges=False,
-            ambient=0.35,
+            ambient=0.55,
             name=obj.id,
+            reset_camera=False,
         )
         self._actors[obj.id] = actor
         self.update_actor(obj, render=False)
@@ -86,7 +87,7 @@ class Viewport(QWidget):
         actor.SetScale(1.0, 1.0, obj.z_max - obj.z_min)
 
         prop = actor.GetProperty()
-        prop.SetColor(_rgb_from_hex(obj.color))
+        prop.SetColor(_lit_rgb_from_hex(obj.color, obj.brightness))
         prop.SetOpacity(obj.opacity)
 
         if render:
@@ -109,15 +110,15 @@ class Viewport(QWidget):
     def remove_object(self, object_id: str) -> None:
         actor = self._actors.pop(object_id, None)
         if actor is not None:
-            self.plotter.remove_actor(actor)
+            self.plotter.remove_actor(actor, reset_camera=False)
         if self._selection_actor is not None:
-            self.plotter.remove_actor(self._selection_actor)
+            self.plotter.remove_actor(self._selection_actor, reset_camera=False)
             self._selection_actor = None
         self.plotter.render()
 
     def highlight_object(self, object_id: str | None) -> None:
         if self._selection_actor is not None:
-            self.plotter.remove_actor(self._selection_actor)
+            self.plotter.remove_actor(self._selection_actor, reset_camera=False)
             self._selection_actor = None
 
         if object_id is None:
@@ -139,6 +140,7 @@ class Viewport(QWidget):
             style="wireframe",
             line_width=2,
             name=f"{object_id}-selection",
+            reset_camera=False,
         )
         self.plotter.render()
 
@@ -172,3 +174,9 @@ def _rgb_from_hex(value: str) -> tuple[float, float, float]:
     green = int(color[2:4], 16) / 255.0
     blue = int(color[4:6], 16) / 255.0
     return (red, green, blue)
+
+
+def _lit_rgb_from_hex(value: str, brightness: float) -> tuple[float, float, float]:
+    if not 0.0 <= brightness <= 2.0:
+        raise ValueError("brightness must be between 0 and 2")
+    return tuple(min(channel * brightness, 1.0) for channel in _rgb_from_hex(value))

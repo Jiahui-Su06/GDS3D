@@ -46,6 +46,7 @@ class GdsLayerObject:
     z_min: float = 0.0
     z_max: float = 15.0
     color: str = "#2D6CDF"
+    brightness: float = 1.0
     opacity: float = 1.0
     visible: bool = True
     defaults: dict[str, Any] = field(default_factory=dict)
@@ -57,10 +58,13 @@ class GdsLayerObject:
             raise ValueError("z_min must be smaller than z_max")
         if not 0.0 <= self.opacity <= 1.0:
             raise ValueError("opacity must be between 0 and 1")
+        if not 0.0 <= self.brightness <= 2.0:
+            raise ValueError("brightness must be between 0 and 2")
         if not self.defaults:
             self.defaults = {
                 "name": self.name,
                 "color": self.color,
+                "brightness": self.brightness,
                 "opacity": self.opacity,
                 "z_min": self.z_min,
                 "z_max": self.z_max,
@@ -74,6 +78,7 @@ class BaseplateObject:
     z_min: float = -50.0
     z_max: float = 0.0
     color: str = "#5F6B78"
+    brightness: float = 1.0
     opacity: float = 1.0
     visible: bool = True
     defaults: dict[str, Any] = field(default_factory=dict)
@@ -85,10 +90,13 @@ class BaseplateObject:
             raise ValueError("z_min must be smaller than z_max")
         if not 0.0 <= self.opacity <= 1.0:
             raise ValueError("opacity must be between 0 and 1")
+        if not 0.0 <= self.brightness <= 2.0:
+            raise ValueError("brightness must be between 0 and 2")
         if not self.defaults:
             self.defaults = {
                 "name": self.name,
                 "color": self.color,
+                "brightness": self.brightness,
                 "opacity": self.opacity,
                 "min_x": self.bounds.min_x,
                 "min_y": self.bounds.min_y,
