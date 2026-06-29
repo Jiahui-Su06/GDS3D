@@ -75,14 +75,9 @@ jobs:
             libxcb-render-util0 \
             libxcb-xinerama0
 
-      - name: Install NSIS
+      - name: Install Inno Setup
         if: matrix.platform == 'windows'
-        run: choco install nsis -y --no-progress
-
-      - name: Add NSIS to PATH
-        if: matrix.platform == 'windows'
-        shell: pwsh
-        run: Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files (x86)\NSIS'
+        run: choco install innosetup -y --no-progress
 
       - name: Install dependencies
         run: uv sync --locked

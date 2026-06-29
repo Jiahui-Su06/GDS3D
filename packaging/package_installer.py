@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import shutil
 import subprocess
 import tomllib
@@ -15,6 +14,7 @@ DIST_DIR = ROOT / "dist"
 INSTALLER_DIR = DIST_DIR / "installers"
 SOURCE_ICON = ROOT / "packaging" / "icons" / "icon.png"
 WINDOWS_ICON = ROOT / "build" / "icons" / f"{APP_NAME}.ico"
+LICENSE_FILE = ROOT / "LICENSE"
 
 PlatformName = str
 ArchName = str
@@ -72,73 +72,68 @@ def _package_windows(arch: ArchName, version: str) -> None:
     if not exe_path.exists():
         raise FileNotFoundError(exe_path)
 
-    outfile = INSTALLER_DIR / f"{APP_NAME}-{version}-windows-{arch}-setup.exe"
-    script_path = DIST_DIR / f"{PACKAGE_NAME}-{arch}.nsi"
+    script_path = DIST_DIR / f"{PACKAGE_NAME}-{arch}.iss"
     script_path.write_text(
-        _nsis_script(app_dir=app_dir, outfile=outfile),
+        _inno_script(app_dir=app_dir, arch=arch, version=version),
         encoding="utf-8",
     )
-    makensis = _makensis_path()
-    subprocess.run([str(makensis), str(script_path)], cwd=ROOT, check=True)
+    iscc = _iscc_path()
+    subprocess.run([str(iscc), str(script_path)], cwd=ROOT, check=True)
 
 
-def _makensis_path() -> Path:
-    makensis = shutil.which("makensis")
-    if makensis is not None:
-        return Path(makensis)
+def _iscc_path() -> Path:
+    iscc = shutil.which("ISCC")
+    if iscc is not None:
+        return Path(iscc)
 
-    for base_name in ("ProgramFiles(x86)", "ProgramFiles"):
-        base_path = os.environ.get(base_name)
-        if not base_path:
-            continue
-        candidate = Path(base_path) / "NSIS" / "makensis.exe"
+    candidates = (
+        Path("C:/Program Files (x86)/Inno Setup 6/ISCC.exe"),
+        Path("C:/Program Files/Inno Setup 6/ISCC.exe"),
+    )
+    for candidate in candidates:
         if candidate.exists():
             return candidate
 
-    raise FileNotFoundError("makensis was not found; install NSIS before packaging")
+    raise FileNotFoundError("ISCC was not found; install Inno Setup before packaging")
 
 
-def _nsis_script(app_dir: Path, outfile: Path) -> str:
-    app_files = _nsis_path(app_dir / "*")
-    installer = _nsis_path(outfile)
-    icon = _nsis_path(WINDOWS_ICON)
+def _inno_script(app_dir: Path, arch: ArchName, version: str) -> str:
+    output_base = f"{APP_NAME}-{version}-windows-{arch}-setup"
+    app_files = _inno_path(app_dir / "*")
+    icon = _inno_path(WINDOWS_ICON)
+    license_file = _inno_path(LICENSE_FILE)
+    output_dir = _inno_path(INSTALLER_DIR)
     return f"""
-Unicode True
-!include MUI2.nsh
+[Setup]
+AppId={{{{4F57BC84-3024-4F40-BDAE-608E333C44AE}}}}
+AppName={APP_NAME}
+AppVersion={version}
+AppPublisher=GDS3D contributors
+DefaultDirName={{autopf}}\\{APP_NAME}
+DefaultGroupName={APP_NAME}
+DisableProgramGroupPage=yes
+LicenseFile={license_file}
+OutputDir={output_dir}
+OutputBaseFilename={output_base}
+SetupIconFile={icon}
+UninstallDisplayIcon={{app}}\\{APP_NAME}.exe
+Compression=lzma2
+SolidCompression=yes
+WizardStyle=modern
 
-Name "{APP_NAME}"
-OutFile "{installer}"
-InstallDir "$LOCALAPPDATA\\Programs\\{APP_NAME}"
-RequestExecutionLevel user
-Icon "{icon}"
-UninstallIcon "{icon}"
+[Tasks]
+Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
 
-!define MUI_ABORTWARNING
-!define MUI_ICON "{icon}"
-!define MUI_UNICON "{icon}"
-!insertmacro MUI_PAGE_DIRECTORY
-!insertmacro MUI_PAGE_INSTFILES
-!insertmacro MUI_UNPAGE_CONFIRM
-!insertmacro MUI_UNPAGE_INSTFILES
-!insertmacro MUI_LANGUAGE "English"
+[Files]
+Source: "{app_files}"; DestDir: "{{app}}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-Section "Install"
-  SetOutPath "$INSTDIR"
-  File /r "{app_files}"
-  CreateDirectory "$SMPROGRAMS\\{APP_NAME}"
-  CreateShortCut "$SMPROGRAMS\\{APP_NAME}\\{APP_NAME}.lnk" "$INSTDIR\\{APP_NAME}.exe"
-  WriteUninstaller "$INSTDIR\\Uninstall.exe"
-SectionEnd
-
-Section "Uninstall"
-  Delete "$SMPROGRAMS\\{APP_NAME}\\{APP_NAME}.lnk"
-  RMDir "$SMPROGRAMS\\{APP_NAME}"
-  RMDir /r "$INSTDIR"
-SectionEnd
+[Icons]
+Name: "{{group}}\\{APP_NAME}"; Filename: "{{app}}\\{APP_NAME}.exe"
+Name: "{{autodesktop}}\\{APP_NAME}"; Filename: "{{app}}\\{APP_NAME}.exe"; Tasks: desktopicon
 """.lstrip()
 
 
-def _nsis_path(path: Path) -> str:
+def _inno_path(path: Path) -> str:
     return str(path.resolve()).replace("\\", "\\\\")
 
 

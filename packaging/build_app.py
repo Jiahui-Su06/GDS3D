@@ -38,6 +38,8 @@ def main() -> int:
         _data_arg(ROOT / "src" / "icons", "src/icons"),
         "--add-data",
         _data_arg(ROOT / "i18n", "i18n"),
+        "--add-data",
+        _data_arg(ROOT / "LICENSE", "."),
         "--collect-submodules",
         "pyvista",
         "--collect-submodules",
