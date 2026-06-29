@@ -252,7 +252,6 @@ dependencies = [
     { name = "pyside6" },
     { name = "pyvista" },
     { name = "pyvistaqt" },
-    { name = "qtpy" },
     { name = "reportlab" },
 ]
 
@@ -263,7 +262,6 @@ requires-dist = [
     { name = "pyside6", specifier = ">=6.11.1" },
     { name = "pyvista", specifier = ">=0.48.4" },
     { name = "pyvistaqt", specifier = ">=0.11.4" },
-    { name = "qtpy", specifier = ">=2.4.3" },
     { name = "reportlab", specifier = ">=5.0.0" },
 ]
 

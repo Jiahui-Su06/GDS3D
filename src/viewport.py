@@ -10,6 +10,7 @@ import pyvista as pv
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 from pyvistaqt import QtInteractor
 
+from i18n import tr
 from mesh_factory import make_baseplate_mesh, make_gds_layer_mesh
 from objects import BaseplateObject, GdsLayerObject, SceneObject
 
@@ -247,16 +248,16 @@ class Viewport(QWidget):
             return make_baseplate_mesh(obj)
         if isinstance(obj, GdsLayerObject):
             if polygons is None:
-                raise ValueError("GDS object requires polygon data")
+                raise ValueError(tr("error.gds_object_requires_polygons"))
             return make_gds_layer_mesh(obj, polygons)
-        raise TypeError(f"unsupported object type: {type(obj).__name__}")
+        raise TypeError(tr("error.unsupported_object_type", name=type(obj).__name__))
 
     def _render_window(self):
         render_window = getattr(self.plotter, "ren_win", None)
         if render_window is None:
             render_window = getattr(self.plotter, "render_window", None)
         if render_window is None:
-            raise RuntimeError("render window is unavailable")
+            raise RuntimeError(tr("error.render_window_unavailable"))
         return render_window
 
     def _export_gl2ps(self, file_path: Path, file_format: str) -> None:
@@ -271,14 +272,14 @@ class Viewport(QWidget):
         elif file_format == "pdf":
             exporter.SetFileFormatToPDF()
         else:
-            raise ValueError(f"unsupported export format: {file_format}")
+            raise ValueError(tr("error.unsupported_export_format", format=file_format))
         exporter.Write()
 
 
 def _rgb_from_hex(value: str) -> tuple[float, float, float]:
     color = value.lstrip("#")
     if len(color) != 6:
-        raise ValueError(f"invalid color: {value}")
+        raise ValueError(tr("error.invalid_color", value=value))
     red = int(color[0:2], 16) / 255.0
     green = int(color[2:4], 16) / 255.0
     blue = int(color[4:6], 16) / 255.0
@@ -287,7 +288,7 @@ def _rgb_from_hex(value: str) -> tuple[float, float, float]:
 
 def _lit_rgb_from_hex(value: str, brightness: float) -> tuple[float, float, float]:
     if not 0.0 <= brightness <= 2.0:
-        raise ValueError("brightness must be between 0 and 2")
+        raise ValueError(tr("error.brightness_range"))
     return tuple(min(channel * brightness, 1.0) for channel in _rgb_from_hex(value))
 
 
@@ -295,7 +296,7 @@ def _merge_actor_bounds(
     bounds_list: list[tuple[float, float, float, float, float, float]],
 ) -> tuple[float, float, float, float, float, float]:
     if not bounds_list:
-        raise ValueError("cannot merge empty bounds")
+        raise ValueError(tr("error.bounds_empty"))
 
     return (
         min(bounds[0] for bounds in bounds_list),

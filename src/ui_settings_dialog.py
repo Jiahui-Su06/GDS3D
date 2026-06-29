@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from i18n import tr
+
 
 LEFT_PANEL_MIN_WIDTH_DEFAULT = 220
 RIGHT_PANEL_MIN_WIDTH_DEFAULT = 360
@@ -32,7 +34,7 @@ class UiSettings:
 class UiSettingsDialog(QDialog):
     def __init__(self, settings: UiSettings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("UI Settings")
+        self.setWindowTitle(tr("settings.title"))
         self.setModal(True)
 
         self._left_width = _make_width_editor(settings.left_panel_min_width)
@@ -49,20 +51,20 @@ class UiSettingsDialog(QDialog):
         layout = QFormLayout(self)
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         layout.addRow(
-            "Components min width",
+            tr("settings.components_min_width"),
             _with_reset(
                 self._left_width,
                 lambda: self._left_width.setValue(LEFT_PANEL_MIN_WIDTH_DEFAULT),
             ),
         )
         layout.addRow(
-            "Properties min width",
+            tr("settings.properties_min_width"),
             _with_reset(
                 self._right_width,
                 lambda: self._right_width.setValue(RIGHT_PANEL_MIN_WIDTH_DEFAULT),
             ),
         )
-        layout.addRow("Show XYZ axes", self._show_axes)
+        layout.addRow(tr("settings.show_xyz_axes"), self._show_axes)
         layout.addRow(buttons)
 
     def settings(self) -> UiSettings:
@@ -91,7 +93,7 @@ def _with_reset(editor: QWidget, reset: Callable[[], None]) -> QWidget:
     reset_button = QPushButton()
     reset_button.setObjectName("resetButton")
     reset_button.setIcon(RESET_ICON)
-    reset_button.setToolTip("Reset to default")
+    reset_button.setToolTip(tr("settings.reset_to_default"))
     reset_button.clicked.connect(reset)
 
     layout.addWidget(editor, 1)

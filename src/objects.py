@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any, Literal, TypeAlias
 from uuid import uuid4
 
+from i18n import tr
+
 
 ObjectKind: TypeAlias = Literal["gds_layer", "baseplate"]
 
@@ -22,9 +24,9 @@ class Bounds2D:
 
     def __post_init__(self) -> None:
         if self.min_x >= self.max_x:
-            raise ValueError("min_x must be smaller than max_x")
+            raise ValueError(tr("error.bounds_degenerate"))
         if self.min_y >= self.max_y:
-            raise ValueError("min_y must be smaller than max_y")
+            raise ValueError(tr("error.bounds_degenerate"))
 
     @property
     def width(self) -> float:
@@ -57,11 +59,11 @@ class GdsLayerObject:
 
     def __post_init__(self) -> None:
         if self.z_min >= self.z_max:
-            raise ValueError("z_min must be smaller than z_max")
+            raise ValueError(tr("error.z_order"))
         if not 0.0 <= self.opacity <= 1.0:
-            raise ValueError("opacity must be between 0 and 1")
+            raise ValueError(tr("error.opacity_range"))
         if not 0.0 <= self.brightness <= 2.0:
-            raise ValueError("brightness must be between 0 and 2")
+            raise ValueError(tr("error.brightness_range"))
         if not self.defaults:
             self.defaults = {
                 "name": self.name,
@@ -89,11 +91,11 @@ class BaseplateObject:
 
     def __post_init__(self) -> None:
         if self.z_min >= self.z_max:
-            raise ValueError("z_min must be smaller than z_max")
+            raise ValueError(tr("error.z_order"))
         if not 0.0 <= self.opacity <= 1.0:
-            raise ValueError("opacity must be between 0 and 1")
+            raise ValueError(tr("error.opacity_range"))
         if not 0.0 <= self.brightness <= 2.0:
-            raise ValueError("brightness must be between 0 and 2")
+            raise ValueError(tr("error.brightness_range"))
         if not self.defaults:
             self.defaults = {
                 "name": self.name,

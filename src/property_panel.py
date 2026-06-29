@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from i18n import tr
 from objects import BaseplateObject, Bounds2D, GdsLayerObject, SceneObject
 
 
@@ -48,41 +49,51 @@ class PropertyPanel(QScrollArea):
             self.show_empty()
             return
 
-        self._add_text("Name", "name", obj.name)
+        self._add_text(tr("property.name"), "name", obj.name)
         if isinstance(obj, GdsLayerObject):
-            self._add_readonly("Layer", str(obj.layer))
-            self._add_readonly("Datatype", str(obj.datatype))
-        self._add_color("Color", "color", obj.color)
-        self._add_float("Brightness", "brightness", obj.brightness, 0.0, 2.0, step=0.05)
-        self._add_float("Opacity", "opacity", obj.opacity, 0.0, 1.0, step=0.05)
+            self._add_readonly(tr("property.layer"), str(obj.layer))
+            self._add_readonly(tr("property.datatype"), str(obj.datatype))
+        self._add_color(tr("property.color"), "color", obj.color)
+        self._add_float(
+            tr("property.brightness"), "brightness", obj.brightness, 0.0, 2.0, step=0.05
+        )
+        self._add_float(tr("property.opacity"), "opacity", obj.opacity, 0.0, 1.0, step=0.05)
 
         if isinstance(obj, GdsLayerObject):
-            self._add_readonly("File", _short_path(obj.file_path))
-            self._add_readonly("Cell", obj.cell_name)
+            self._add_readonly(tr("property.file"), _short_path(obj.file_path))
+            self._add_readonly(tr("property.cell"), obj.cell_name)
             self._add_bounds_readonly(obj)
-            self._add_float("Z Min", "z_min", obj.z_min, -1_000_000.0, 1_000_000.0)
-            self._add_float("Z Max", "z_max", obj.z_max, -1_000_000.0, 1_000_000.0)
+            self._add_float(
+                tr("property.z_min"), "z_min", obj.z_min, -1_000_000.0, 1_000_000.0
+            )
+            self._add_float(
+                tr("property.z_max"), "z_max", obj.z_max, -1_000_000.0, 1_000_000.0
+            )
         elif isinstance(obj, BaseplateObject):
             self._add_float(
-                "X Min", "min_x", obj.bounds.min_x, -1_000_000.0, 1_000_000.0
+                tr("property.x_min"), "min_x", obj.bounds.min_x, -1_000_000.0, 1_000_000.0
             )
             self._add_float(
-                "X Max", "max_x", obj.bounds.max_x, -1_000_000.0, 1_000_000.0
+                tr("property.x_max"), "max_x", obj.bounds.max_x, -1_000_000.0, 1_000_000.0
             )
             self._add_float(
-                "Y Min", "min_y", obj.bounds.min_y, -1_000_000.0, 1_000_000.0
+                tr("property.y_min"), "min_y", obj.bounds.min_y, -1_000_000.0, 1_000_000.0
             )
             self._add_float(
-                "Y Max", "max_y", obj.bounds.max_y, -1_000_000.0, 1_000_000.0
+                tr("property.y_max"), "max_y", obj.bounds.max_y, -1_000_000.0, 1_000_000.0
             )
-            self._add_float("Z Min", "z_min", obj.z_min, -1_000_000.0, 1_000_000.0)
-            self._add_float("Z Max", "z_max", obj.z_max, -1_000_000.0, 1_000_000.0)
+            self._add_float(
+                tr("property.z_min"), "z_min", obj.z_min, -1_000_000.0, 1_000_000.0
+            )
+            self._add_float(
+                tr("property.z_max"), "z_max", obj.z_max, -1_000_000.0, 1_000_000.0
+            )
 
     def show_scene_summary(self, object_count: int) -> None:
         self._clear()
         self._object_id = None
-        self._add_readonly("Selection", "Scene")
-        self._add_readonly("Objects", str(object_count))
+        self._add_readonly(tr("property.selection"), tr("property.selection_scene"))
+        self._add_readonly(tr("property.objects"), str(object_count))
 
     def show_cell_summary(
         self,
@@ -95,23 +106,23 @@ class PropertyPanel(QScrollArea):
     ) -> None:
         self._clear()
         self._object_id = None
-        self._add_readonly("Selection", "Cell")
-        self._add_readonly("Cell", name)
-        self._add_readonly("File", _short_path(file_path))
-        self._add_readonly("Layers", str(layer_count))
+        self._add_readonly(tr("property.selection"), tr("property.selection_cell"))
+        self._add_readonly(tr("property.cell"), name)
+        self._add_readonly(tr("property.file"), _short_path(file_path))
+        self._add_readonly(tr("property.layers"), str(layer_count))
         if bounds is not None:
-            self._add_readonly("X Min", f"{bounds.min_x:.4f}")
-            self._add_readonly("X Max", f"{bounds.max_x:.4f}")
-            self._add_readonly("Y Min", f"{bounds.min_y:.4f}")
-            self._add_readonly("Y Max", f"{bounds.max_y:.4f}")
+            self._add_readonly(tr("property.x_min"), f"{bounds.min_x:.4f}")
+            self._add_readonly(tr("property.x_max"), f"{bounds.max_x:.4f}")
+            self._add_readonly(tr("property.y_min"), f"{bounds.min_y:.4f}")
+            self._add_readonly(tr("property.y_max"), f"{bounds.max_y:.4f}")
         if z_min is not None and z_max is not None:
-            self._add_readonly("Z Min", f"{z_min:.4f}")
-            self._add_readonly("Z Max", f"{z_max:.4f}")
+            self._add_readonly(tr("property.z_min"), f"{z_min:.4f}")
+            self._add_readonly(tr("property.z_max"), f"{z_max:.4f}")
 
     def show_empty(self) -> None:
         self._clear()
         self._object_id = None
-        label = QLabel("No component selected")
+        label = QLabel(tr("property.no_component_selected"))
         label.setObjectName("emptyLabel")
         self._layout.addRow(label)
 
@@ -170,7 +181,7 @@ class PropertyPanel(QScrollArea):
 
     def _choose_color(self, field: str, button: QPushButton) -> None:
         current = QColor(button.text())
-        color = QColorDialog.getColor(current, self, "Select Color")
+        color = QColorDialog.getColor(current, self, tr("dialog.select_color"))
         if not color.isValid():
             return
         value = color.name()
@@ -179,10 +190,10 @@ class PropertyPanel(QScrollArea):
         self._emit(field, value)
 
     def _add_bounds_readonly(self, obj: GdsLayerObject) -> None:
-        self._add_readonly("X Min", f"{obj.bounds.min_x:.4f}")
-        self._add_readonly("X Max", f"{obj.bounds.max_x:.4f}")
-        self._add_readonly("Y Min", f"{obj.bounds.min_y:.4f}")
-        self._add_readonly("Y Max", f"{obj.bounds.max_y:.4f}")
+        self._add_readonly(tr("property.x_min"), f"{obj.bounds.min_x:.4f}")
+        self._add_readonly(tr("property.x_max"), f"{obj.bounds.max_x:.4f}")
+        self._add_readonly(tr("property.y_min"), f"{obj.bounds.min_y:.4f}")
+        self._add_readonly(tr("property.y_max"), f"{obj.bounds.max_y:.4f}")
 
     def _with_reset(self, editor: QWidget, field: str) -> QWidget:
         wrapper = QWidget()
@@ -193,7 +204,7 @@ class PropertyPanel(QScrollArea):
         reset_button = QPushButton()
         reset_button.setObjectName("resetButton")
         reset_button.setIcon(RESET_ICON)
-        reset_button.setToolTip("Reset")
+        reset_button.setToolTip(tr("property.reset"))
         reset_button.clicked.connect(lambda: self._emit_reset(field))
 
         layout.addWidget(editor, 1)

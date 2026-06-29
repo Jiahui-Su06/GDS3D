@@ -9,6 +9,7 @@ from reportlab.lib.units import mm
 from reportlab.platypus import Image as RLImage
 from reportlab.platypus import PageBreak, SimpleDocTemplate, Table, TableStyle
 
+from i18n import DEFAULT_LOCALE, tr_for_locale
 from objects import BaseplateObject, GdsLayerObject, SceneObject
 from viewport import Viewport
 
@@ -18,7 +19,7 @@ def export_scene_pdf(
 ) -> None:
     path = file_path.expanduser().resolve()
     if path.suffix.lower() != ".pdf":
-        raise ValueError("PDF export requires a .pdf file")
+        raise ValueError(tr_for_locale(DEFAULT_LOCALE, "error.pdf_requires_pdf"))
 
     with TemporaryDirectory() as temp_dir:
         temp_dir_path = Path(temp_dir)
@@ -58,14 +59,14 @@ def _build_pdf(
 def _make_table(objects: list[SceneObject]) -> Table:
     rows = [
         [
-            "Name",
-            "Kind",
-            "Cell",
-            "Layer",
-            "Datatype",
-            "X Bounds",
-            "Y Bounds",
-            "Z Bounds",
+            _pdf_text("pdf.name"),
+            _pdf_text("pdf.kind"),
+            _pdf_text("pdf.cell"),
+            _pdf_text("pdf.layer"),
+            _pdf_text("pdf.datatype"),
+            _pdf_text("pdf.x_bounds"),
+            _pdf_text("pdf.y_bounds"),
+            _pdf_text("pdf.z_bounds"),
         ]
     ]
 
@@ -74,7 +75,7 @@ def _make_table(objects: list[SceneObject]) -> Table:
             rows.append(
                 [
                     obj.name,
-                    "GDS",
+                    _pdf_text("pdf.gds"),
                     obj.cell_name,
                     str(obj.layer),
                     str(obj.datatype),
@@ -87,7 +88,7 @@ def _make_table(objects: list[SceneObject]) -> Table:
             rows.append(
                 [
                     obj.name,
-                    "Baseplate",
+                    _pdf_text("pdf.baseplate"),
                     "",
                     "",
                     "",
@@ -125,3 +126,7 @@ def _make_table(objects: list[SceneObject]) -> Table:
 
 def _range_text(min_value: float, max_value: float) -> str:
     return f"{min_value:.2f}, {max_value:.2f}"
+
+
+def _pdf_text(key: str) -> str:
+    return tr_for_locale(DEFAULT_LOCALE, key)

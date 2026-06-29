@@ -7,6 +7,7 @@ import mapbox_earcut as earcut
 import numpy as np
 import pyvista as pv
 
+from i18n import tr
 from objects import BaseplateObject, GdsLayerObject
 
 
@@ -28,7 +29,7 @@ def make_gds_layer_mesh(
     obj: GdsLayerObject, polygons: list[gdstk.Polygon]
 ) -> pv.PolyData:
     if not polygons:
-        raise ValueError("cannot build GDS mesh without polygons")
+        raise ValueError(tr("error.gds_mesh_requires_polygons"))
 
     source_polygons = _union_polygons(polygons)
     meshes: list[pv.PolyData] = []
@@ -40,7 +41,7 @@ def make_gds_layer_mesh(
             continue
 
     if not meshes:
-        raise ValueError("no valid polygons could be converted to a mesh")
+        raise ValueError(tr("error.no_valid_polygons_mesh"))
 
     mesh = meshes[0]
     for part in meshes[1:]:
@@ -60,20 +61,20 @@ def _union_polygons(polygons: list[gdstk.Polygon]) -> list[gdstk.Polygon]:
 
 def _extrude_polygon(xy: np.ndarray) -> pv.PolyData:
     if xy.ndim != 2:
-        raise ValueError("polygon points must be a 2D array")
+        raise ValueError(tr("error.polygon_points_2d"))
     if xy.shape[1] != 2:
-        raise ValueError("polygon points must have shape (n, 2)")
+        raise ValueError(tr("error.polygon_points_shape"))
 
     if len(xy) >= 2 and np.allclose(xy[0], xy[-1]):
         xy = xy[:-1]
     if len(xy) < 3:
-        raise ValueError("polygon needs at least 3 vertices")
+        raise ValueError(tr("error.polygon_vertices_min"))
 
     points3d = np.column_stack((xy, np.zeros(len(xy))))
     ring_end_indices = np.array([len(xy)], dtype=np.uint32)
     tri_idx = earcut.triangulate_float64(xy, ring_end_indices)
     if len(tri_idx) == 0:
-        raise ValueError("triangulation failed")
+        raise ValueError(tr("error.triangulation_failed"))
 
     faces = np.empty((len(tri_idx) // 3, 4), dtype=np.int64)
     faces[:, 0] = 3

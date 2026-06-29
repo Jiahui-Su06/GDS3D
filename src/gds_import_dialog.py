@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from gds_loader import GdsFileInfo, GdsLayerSelection
+from i18n import tr
 
 
 SELECTION_ROLE = Qt.ItemDataRole.UserRole
@@ -23,13 +24,19 @@ SELECTION_ROLE = Qt.ItemDataRole.UserRole
 class GdsImportDialog(QDialog):
     def __init__(self, info: GdsFileInfo, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Import GDS")
+        self.setWindowTitle(tr("dialog.import_gds"))
         self.setModal(True)
         self.resize(760, 520)
 
         self._tree = QTreeWidget()
         self._tree.setColumnCount(3)
-        self._tree.setHeaderLabels(["Cell / Layer", "Polygons", "Bounds"])
+        self._tree.setHeaderLabels(
+            [
+                tr("gds_import.cell_layer"),
+                tr("gds_import.polygons"),
+                tr("gds_import.bounds"),
+            ]
+        )
         self._tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._tree.itemChanged.connect(self._sync_child_checks)
 
@@ -79,7 +86,11 @@ class GdsImportDialog(QDialog):
                 bounds = layer.bounds
                 layer_item = QTreeWidgetItem(
                     [
-                        f"Layer {selection.layer} / Datatype {selection.datatype}",
+                        tr(
+                            "gds_import.layer_datatype",
+                            layer=selection.layer,
+                            datatype=selection.datatype,
+                        ),
                         str(layer.polygon_count),
                         (
                             f"{bounds.min_x:.2f}, {bounds.min_y:.2f} - "
@@ -117,7 +128,9 @@ class GdsImportDialog(QDialog):
             self.accept()
             return
 
-        QMessageBox.warning(self, "Import GDS", "Select at least one GDS layer.")
+        QMessageBox.warning(
+            self, tr("dialog.import_gds"), tr("gds_import.select_layer_warning")
+        )
 
     def _check_only_layer_if_unambiguous(self) -> None:
         layer_items: list[QTreeWidgetItem] = []

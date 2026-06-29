@@ -6,6 +6,7 @@ from pathlib import Path
 import gdstk
 import numpy as np
 
+from i18n import tr
 from objects import Bounds2D
 
 
@@ -51,19 +52,19 @@ def load_default_gds_layer(file_path: Path) -> GdsLayerData:
     if not path.exists():
         raise FileNotFoundError(path)
     if path.suffix.lower() != ".gds":
-        raise ValueError("selected file is not a .gds file")
+        raise ValueError(tr("error.selected_not_gds"))
 
     lib = gdstk.read_gds(str(path))
     top_cells = [cell for cell in lib.top_level() if isinstance(cell, gdstk.Cell)]
     if not top_cells:
-        raise ValueError("no top-level cell found in GDS")
+        raise ValueError(tr("error.gds_no_top_cell"))
 
     cell = _choose_cell(top_cells)
     all_polygons = cell.get_polygons(
         apply_repetitions=True, include_paths=True, depth=None
     )
     if not all_polygons:
-        raise ValueError(f"cell has no polygons: {cell.name}")
+        raise ValueError(tr("error.gds_cell_no_polygons", name=cell.name))
 
     layer, datatype = _choose_layer_pair(all_polygons)
     polygons = [
@@ -72,7 +73,9 @@ def load_default_gds_layer(file_path: Path) -> GdsLayerData:
         if int(poly.layer) == layer and int(poly.datatype) == datatype
     ]
     if not polygons:
-        raise ValueError(f"no polygons found on layer/datatype ({layer}, {datatype})")
+        raise ValueError(
+            tr("error.gds_layer_no_polygons", layer=layer, datatype=datatype)
+        )
 
     return GdsLayerData(
         file_path=path,
@@ -89,7 +92,7 @@ def inspect_gds_file(file_path: Path) -> GdsFileInfo:
     lib = gdstk.read_gds(str(path))
     cells = _display_cells(lib)
     if not cells:
-        raise ValueError("no cell found in GDS")
+        raise ValueError(tr("error.gds_no_cell"))
 
     cell_infos: list[GdsCellInfo] = []
     for cell in cells:
@@ -110,7 +113,7 @@ def inspect_gds_file(file_path: Path) -> GdsFileInfo:
             cell_infos.append(GdsCellInfo(cell.name, layer_infos))
 
     if not cell_infos:
-        raise ValueError("no renderable GDS layers found")
+        raise ValueError(tr("error.gds_no_renderable_layers"))
 
     return GdsFileInfo(file_path=path, cells=cell_infos)
 
@@ -129,7 +132,7 @@ def load_gds_layers(
     for selection in selections:
         cell = cells.get(selection.cell_name)
         if cell is None:
-            raise ValueError(f"cell not found: {selection.cell_name}")
+            raise ValueError(tr("error.gds_cell_missing", name=selection.cell_name))
 
         polygons = [
             poly
@@ -140,8 +143,12 @@ def load_gds_layers(
         bounds = _try_compute_bounds(polygons)
         if bounds is None:
             raise ValueError(
-                "no renderable polygons found on "
-                f"{selection.cell_name} L{selection.layer}/{selection.datatype}"
+                tr(
+                    "error.gds_no_renderable_polygons",
+                    cell_name=selection.cell_name,
+                    layer=selection.layer,
+                    datatype=selection.datatype,
+                )
             )
 
         data.append(
@@ -198,7 +205,7 @@ def _resolve_gds_path(file_path: Path) -> Path:
     if not path.exists():
         raise FileNotFoundError(path)
     if path.suffix.lower() != ".gds":
-        raise ValueError("selected file is not a .gds file")
+        raise ValueError(tr("error.selected_not_gds"))
     return path
 
 
@@ -219,7 +226,7 @@ def _polygons_by_layer(
 def _compute_bounds(polygons: list[gdstk.Polygon]) -> Bounds2D:
     bounds = _try_compute_bounds(polygons)
     if bounds is None:
-        raise ValueError("cannot compute bounds for degenerate polygons")
+        raise ValueError(tr("error.bounds_degenerate"))
     return bounds
 
 
@@ -230,7 +237,7 @@ def _try_compute_bounds(polygons: list[gdstk.Polygon]) -> Bounds2D | None:
 
     xy = np.vstack(points)
     if xy.shape[1] != 2:
-        raise ValueError("GDS polygon points must be 2D")
+        raise ValueError(tr("error.gds_points_2d"))
 
     min_x = float(np.min(xy[:, 0]))
     min_y = float(np.min(xy[:, 1]))

@@ -16,8 +16,10 @@ from PySide6.QtWidgets import (
 )
 
 from component_tree import ComponentGroupInfo, ComponentTree
+from export_dialog import ExportDialog, ExportFormat
 from gds_import_dialog import GdsImportDialog
 from gds_loader import GdsLayerData, inspect_gds_file, load_gds_layers
+from i18n import DEFAULT_LOCALE, SUPPORTED_LOCALES, locale, set_locale, tr
 from objects import BaseplateObject, Bounds2D, GdsLayerObject, SceneObject
 from pdf_exporter import export_scene_pdf
 from project_archive import (
@@ -37,6 +39,10 @@ from viewport import Viewport
 
 
 UNDO_STACK_COUNT_MAX = 100
+LANGUAGE_LABEL_KEYS = {
+    "en": "language.english",
+    "zh-CN": "language.simplified_chinese",
+}
 
 
 class MainWindow(QMainWindow):
@@ -51,7 +57,9 @@ class MainWindow(QMainWindow):
         self._undo_stack: list[tuple[str, Callable[[], None]]] = []
         self._undo_action: QAction | None = None
         self._is_restoring = False
+        self._export_format: ExportFormat = "png"
         self._settings = QSettings("GDS3D", "GDS3D")
+        set_locale(self._load_locale())
         self._ui_settings = self._load_ui_settings()
 
         self.viewport = Viewport(self)
@@ -62,7 +70,7 @@ class MainWindow(QMainWindow):
         self._create_docks()
         self._create_menu_bar()
         self._apply_ui_settings()
-        self.statusBar().showMessage("Ready")
+        self.statusBar().showMessage(tr("status.ready"))
 
         self.component_tree.object_selected.connect(self._select_object)
         self.component_tree.visibility_changed.connect(self._set_visibility)
@@ -75,9 +83,9 @@ class MainWindow(QMainWindow):
     def import_gds(self) -> None:
         file_name, _ = QFileDialog.getOpenFileName(
             self,
-            "Import GDS",
+            tr("dialog.import_gds"),
             str(Path.cwd()),
-            "GDS Files (*.gds);;All Files (*)",
+            _file_filter("filter.gds"),
         )
         if not file_name:
             return
@@ -111,27 +119,31 @@ class MainWindow(QMainWindow):
                 imported_entries.append((obj, data))
 
             self._push_undo(
-                "Import GDS",
+                tr("undo.import_gds"),
                 lambda object_ids=tuple(obj.id for obj, _data in imported_entries): (
                     self._delete_objects(
                         object_ids,
-                        "Removed imported GDS layers",
+                        tr("status.import_removed"),
                     )
                 ),
             )
             self.viewport.reset_camera()
             self.statusBar().showMessage(
-                f"Imported {len(layers)} layer(s) from {file_info.file_path.name}"
+                tr(
+                    "status.imported_layers",
+                    count=len(layers),
+                    name=file_info.file_path.name,
+                )
             )
         except Exception as exc:
-            self._show_error("Import failed", str(exc))
+            self._show_error(tr("error.import_failed"), str(exc))
 
     def open_project(self) -> None:
         file_name, _ = QFileDialog.getOpenFileName(
             self,
-            "Open Project",
+            tr("dialog.open_project"),
             str(Path.cwd()),
-            "GDS3D Projects (*.gds3d);;All Files (*)",
+            _file_filter("filter.gds3d"),
         )
         if not file_name:
             return
@@ -139,37 +151,39 @@ class MainWindow(QMainWindow):
         try:
             self._load_project(Path(file_name))
             self._clear_undo_history()
-            self.statusBar().showMessage(f"Opened {Path(file_name).name}")
+            self.statusBar().showMessage(
+                tr("status.opened", name=Path(file_name).name)
+            )
         except Exception as exc:
-            self._show_error("Open project failed", str(exc))
+            self._show_error(tr("error.open_project_failed"), str(exc))
 
     def export_view_as_png(self) -> None:
-        self._export_view(
-            "Export View", "PNG Files (*.png)", "png", self.viewport.export_png
-        )
+        self._export_view("png")
 
     def export_view_as_svg(self) -> None:
-        self._export_view(
-            "Export View", "SVG Files (*.svg)", "svg", self.viewport.export_svg
-        )
+        self._export_view("svg")
 
     def export_view_as_pdf(self) -> None:
-        self._export_view("Export View", "PDF Files (*.pdf)", "pdf", self._export_pdf)
+        self._export_view("pdf")
 
     def export_scene_as_gltf(self) -> None:
-        self._export_view(
-            "Export Scene",
-            "glTF Files (*.gltf)",
-            "gltf",
-            self.viewport.export_gltf,
-        )
+        self._export_view("gltf")
+
+    def export_as(self) -> None:
+        dialog = ExportDialog(self._export_format, self)
+        if dialog.exec() != ExportDialog.DialogCode.Accepted:
+            return
+
+        options = dialog.options()
+        self._export_format = options.file_format
+        self._export_view(options.file_format)
 
     def export_project_as_gds3d(self) -> None:
         file_name, _ = QFileDialog.getSaveFileName(
             self,
-            "Export Project",
+            tr("dialog.export_project"),
             str(Path.cwd() / "project.gds3d"),
-            "GDS3D Projects (*.gds3d);;All Files (*)",
+            _file_filter("filter.gds3d"),
         )
         if not file_name:
             return
@@ -177,9 +191,9 @@ class MainWindow(QMainWindow):
         path = self._ensure_suffix(Path(file_name), "gds3d")
         try:
             self._write_project(path)
-            self.statusBar().showMessage(f"Exported {path.name}")
+            self.statusBar().showMessage(tr("status.exported", name=path.name))
         except Exception as exc:
-            self._show_error("Export failed", str(exc))
+            self._show_error(tr("error.export_failed"), str(exc))
 
     def create_baseplate(self) -> None:
         bounds = self._default_baseplate_bounds()
@@ -190,21 +204,22 @@ class MainWindow(QMainWindow):
             self.viewport.add_or_update(obj)
             self.component_tree.add_object(obj)
             self._push_undo(
-                "Create Baseplate",
+                tr("undo.create_baseplate"),
                 lambda object_id=obj.id: self.delete_selected_object(object_id),
             )
             if should_reset_camera:
                 self.viewport.reset_camera()
-            self.statusBar().showMessage(f"Created {obj.name}")
+            self.statusBar().showMessage(tr("status.created", name=obj.name))
         except Exception as exc:
-            self._show_error("Create baseplate failed", str(exc))
+            self._show_error(tr("error.create_baseplate_failed"), str(exc))
 
     def delete_selected(self) -> None:
         current_item = self.component_tree.currentItem()
         group_info = self.component_tree.group_info_for_item(current_item)
         if group_info is not None:
             self._delete_objects(
-                group_info.object_ids, f"Deleted cell {group_info.name}"
+                group_info.object_ids,
+                tr("status.deleted_cell", name=group_info.name),
             )
             return
 
@@ -216,7 +231,7 @@ class MainWindow(QMainWindow):
         if obj is None:
             return
 
-        self._delete_objects((object_id,), f"Deleted {obj.name}")
+        self._delete_objects((object_id,), tr("status.deleted", name=obj.name))
 
     def _delete_objects(
         self, object_ids: tuple[str, ...], status_message: str
@@ -240,7 +255,7 @@ class MainWindow(QMainWindow):
         self.property_panel.show_scene_summary(self.scene.count())
         self.statusBar().showMessage(status_message)
         self._push_undo(
-            "Delete",
+            tr("undo.delete"),
             lambda entries=tuple(deleted_entries): self._restore_deleted_objects(
                 entries
             ),
@@ -249,7 +264,10 @@ class MainWindow(QMainWindow):
 
     def _delete_requested(self, target: object) -> None:
         if isinstance(target, ComponentGroupInfo):
-            self._delete_objects(target.object_ids, f"Deleted cell {target.name}")
+            self._delete_objects(
+                target.object_ids,
+                tr("status.deleted_cell", name=target.name),
+            )
             return
         if isinstance(target, str):
             self.delete_selected_object(target)
@@ -258,46 +276,55 @@ class MainWindow(QMainWindow):
         obj = self.scene.get(object_id)
         if obj is None:
             return
-        self._delete_objects((object_id,), f"Deleted {obj.name}")
+        self._delete_objects((object_id,), tr("status.deleted", name=obj.name))
 
     def _create_docks(self) -> None:
-        self.left_dock = QDockWidget("Components", self)
+        self.left_dock = QDockWidget(tr("dock.components"), self)
         self.left_dock.setObjectName("componentsDock")
         self.left_dock.setWidget(self.component_tree)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.left_dock)
 
-        self.right_dock = QDockWidget("Properties", self)
+        self.right_dock = QDockWidget(tr("dock.properties"), self)
         self.right_dock.setObjectName("propertiesDock")
         self.right_dock.setWidget(self.property_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.right_dock)
 
     def _create_menu_bar(self) -> None:
-        file_menu = self.menuBar().addMenu("&File")
-        file_menu.addAction("Open Project", self.open_project)
-        file_menu.addAction("Import GDS", self.import_gds)
+        self.menuBar().clear()
+        file_menu = self.menuBar().addMenu(tr("menu.file"))
+        file_menu.addAction(tr("action.open_project"), self.open_project)
+        file_menu.addAction(tr("action.import_gds"), self.import_gds)
         file_menu.addSeparator()
 
-        file_menu.addAction("Export", self.export_project_as_gds3d)
+        export_action = file_menu.addAction(
+            tr("action.export"), self.export_project_as_gds3d
+        )
+        export_action.setShortcut(QKeySequence.StandardKey.Save)
+        export_as_action = file_menu.addAction(tr("menu.export_as"), self.export_as)
+        export_as_action.setShortcut(QKeySequence.StandardKey.SaveAs)
 
-        export_as_menu = QMenu("Export As", self)
-        export_as_menu.addAction("PNG", self.export_view_as_png)
-        export_as_menu.addAction("SVG", self.export_view_as_svg)
-        export_as_menu.addAction("PDF", self.export_view_as_pdf)
-        export_as_menu.addAction("glTF", self.export_scene_as_gltf)
-        file_menu.addMenu(export_as_menu)
-
-        edit_menu = self.menuBar().addMenu("&Edit")
-        self._undo_action = edit_menu.addAction("Undo", self.undo)
+        edit_menu = self.menuBar().addMenu(tr("menu.edit"))
+        self._undo_action = edit_menu.addAction(tr("action.undo"), self.undo)
         self._undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self._undo_action.setShortcutVisibleInContextMenu(True)
         self._undo_action.setEnabled(False)
-        edit_menu.addAction("Create Baseplate", self.create_baseplate)
-        edit_menu.addAction("Delete", self.delete_selected)
+        edit_menu.addAction(tr("action.create_baseplate"), self.create_baseplate)
+        edit_menu.addAction(tr("action.delete"), self.delete_selected)
         edit_menu.addSeparator()
-        edit_menu.addAction("Reset Camera", self.viewport.reset_camera)
+        edit_menu.addAction(tr("action.reset_camera"), self.viewport.reset_camera)
 
-        settings_menu = self.menuBar().addMenu("&Settings")
-        settings_menu.addAction("UI Settings", self.open_ui_settings)
+        settings_menu = self.menuBar().addMenu(tr("menu.settings"))
+        language_menu = QMenu(tr("menu.languages"), self)
+        for locale_name in SUPPORTED_LOCALES:
+            action = language_menu.addAction(
+                tr(LANGUAGE_LABEL_KEYS[locale_name]),
+                lambda locale_name=locale_name: self._set_language(locale_name),
+            )
+            action.setCheckable(True)
+            action.setChecked(locale() == locale_name)
+        settings_menu.addMenu(language_menu)
+        settings_menu.addSeparator()
+        settings_menu.addAction(tr("action.ui_settings"), self.open_ui_settings)
 
     def open_ui_settings(self) -> None:
         dialog = UiSettingsDialog(self._ui_settings, self)
@@ -307,7 +334,7 @@ class MainWindow(QMainWindow):
         self._ui_settings = dialog.settings()
         self._save_ui_settings(self._ui_settings)
         self._apply_ui_settings()
-        self.statusBar().showMessage("Updated UI settings")
+        self.statusBar().showMessage(tr("status.ui_settings_updated"))
 
     def _load_ui_settings(self) -> UiSettings:
         left_width = _settings_int(
@@ -326,6 +353,30 @@ class MainWindow(QMainWindow):
         )
         show_axes = self._settings.value("ui/showAxes", True, type=bool)
         return UiSettings(left_width, right_width, bool(show_axes))
+
+    def _load_locale(self) -> str:
+        value = self._settings.value("ui/locale", locale())
+        if isinstance(value, str) and value in SUPPORTED_LOCALES:
+            return value
+        return DEFAULT_LOCALE
+
+    def _set_language(self, locale_name: str) -> None:
+        if locale_name not in SUPPORTED_LOCALES or locale_name == locale():
+            return
+
+        set_locale(locale_name)
+        self._settings.setValue("ui/locale", locale_name)
+        self._refresh_translated_text()
+
+    def _refresh_translated_text(self) -> None:
+        self.left_dock.setWindowTitle(tr("dock.components"))
+        self.right_dock.setWindowTitle(tr("dock.properties"))
+        self.component_tree.refresh_text()
+        self._create_menu_bar()
+        current_item = self.component_tree.currentItem()
+        group_info = self.component_tree.group_info_for_item(current_item)
+        self._select_object(group_info or self.component_tree.current_object_id())
+        self.statusBar().showMessage(tr("status.ready"))
 
     def _save_ui_settings(self, settings: UiSettings) -> None:
         self._settings.setValue("ui/leftPanelMinWidth", settings.left_panel_min_width)
@@ -357,13 +408,15 @@ class MainWindow(QMainWindow):
                 z_range[1] if z_range is not None else None,
             )
             self.viewport.highlight_objects(list(object_id.object_ids))
-            self.statusBar().showMessage(f"Selected cell {object_id.name}")
+            self.statusBar().showMessage(
+                tr("status.cell_selected", name=object_id.name)
+            )
             return
 
         if not isinstance(object_id, str):
             self.property_panel.show_scene_summary(self.scene.count())
             self.viewport.highlight_object(None)
-            self.statusBar().showMessage("Scene selected")
+            self.statusBar().showMessage(tr("status.scene_selected"))
             return
 
         obj = self.scene.get(object_id)
@@ -374,7 +427,7 @@ class MainWindow(QMainWindow):
 
         self.property_panel.set_object(obj)
         self.viewport.highlight_object(obj.id)
-        self.statusBar().showMessage(f"Selected {obj.name}")
+        self.statusBar().showMessage(tr("status.object_selected", name=obj.name))
 
     def _update_property(self, object_id: str, field: str, value: object) -> None:
         obj = self.scene.get(object_id)
@@ -387,7 +440,7 @@ class MainWindow(QMainWindow):
             current_state = self._capture_property_state(obj, field)
             if current_state != previous_state:
                 self._push_undo(
-                    "Edit Property",
+                    tr("undo.edit_property"),
                     lambda object_id=obj.id, field=field, state=previous_state: (
                         self._restore_property_state(object_id, field, state)
                     ),
@@ -395,10 +448,12 @@ class MainWindow(QMainWindow):
             self._sync_view_after_property(obj, field)
             self.component_tree.refresh_object(obj)
             self.component_tree.select_object(obj.id)
-            self.statusBar().showMessage(f"Updated {obj.name}: {field}")
+            self.statusBar().showMessage(
+                tr("status.updated_property", name=obj.name, field=field)
+            )
         except Exception as exc:
             self.property_panel.set_object(obj)
-            self._show_error("Invalid property", str(exc))
+            self._show_error(tr("error.invalid_property"), str(exc))
 
     def _set_visibility(self, object_id: str, visible: bool) -> None:
         obj = self.scene.get(object_id)
@@ -411,13 +466,15 @@ class MainWindow(QMainWindow):
         self.component_tree.refresh_object(obj)
         if previous_visible != visible:
             self._push_undo(
-                "Toggle Visibility",
+                tr("undo.toggle_visibility"),
                 lambda object_id=obj.id, state=previous_visible: self._set_visibility(
                     object_id, state
                 ),
             )
-        state = "shown" if visible else "hidden"
-        self.statusBar().showMessage(f"{obj.name} {state}")
+        state = tr("status.shown") if visible else tr("status.hidden")
+        self.statusBar().showMessage(
+            tr("status.object_visibility_changed", name=obj.name, state=state)
+        )
 
     def _set_group_visibility(self, group: object, visible: bool) -> None:
         if not isinstance(group, ComponentGroupInfo):
@@ -438,11 +495,13 @@ class MainWindow(QMainWindow):
         )
         if changed_states:
             self._push_undo(
-                "Toggle Cell Visibility",
+                tr("undo.toggle_cell_visibility"),
                 lambda states=changed_states: self._restore_visibility_states(states),
             )
-        state = "shown" if visible else "hidden"
-        self.statusBar().showMessage(f"Cell {group.name} {state}")
+        state = tr("status.shown") if visible else tr("status.hidden")
+        self.statusBar().showMessage(
+            tr("status.cell_visibility_changed", name=group.name, state=state)
+        )
 
     def _reset_property(self, object_id: str, field: str) -> None:
         obj = self.scene.get(object_id)
@@ -458,7 +517,7 @@ class MainWindow(QMainWindow):
             current_state = self._capture_property_state(obj, field)
             if current_state != previous_state:
                 self._push_undo(
-                    "Reset Property",
+                    tr("undo.reset_property"),
                     lambda object_id=obj.id, field=field, state=previous_state: (
                         self._restore_property_state(object_id, field, state)
                     ),
@@ -467,16 +526,18 @@ class MainWindow(QMainWindow):
             self.component_tree.refresh_object(obj)
             self.property_panel.set_object(obj)
             self.component_tree.select_object(obj.id)
-            self.statusBar().showMessage(f"Reset {obj.name}: {field}")
+            self.statusBar().showMessage(
+                tr("status.reset_property", name=obj.name, field=field)
+            )
         except Exception as exc:
             self.property_panel.set_object(obj)
-            self._show_error("Reset failed", str(exc))
+            self._show_error(tr("error.reset_failed"), str(exc))
 
     def _apply_property(self, obj: SceneObject, field: str, value: object) -> None:
         if field == "name":
             text = str(value).strip()
             if not text:
-                raise ValueError("name cannot be empty")
+                raise ValueError(tr("error.name_empty"))
             obj.name = text
             return
         if field == "visible":
@@ -488,13 +549,13 @@ class MainWindow(QMainWindow):
         if field == "brightness":
             brightness = float(value)
             if not 0.0 <= brightness <= 2.0:
-                raise ValueError("brightness must be between 0 and 2")
+                raise ValueError(tr("error.brightness_range"))
             obj.brightness = brightness
             return
         if field == "opacity":
             opacity = float(value)
             if not 0.0 <= opacity <= 1.0:
-                raise ValueError("opacity must be between 0 and 1")
+                raise ValueError(tr("error.opacity_range"))
             obj.opacity = opacity
             return
         if field in {"z_min", "z_max"}:
@@ -508,13 +569,13 @@ class MainWindow(QMainWindow):
         }:
             self._apply_baseplate_bound(obj, field, float(value))
             return
-        raise ValueError(f"unsupported property: {field}")
+        raise ValueError(tr("error.unsupported_property", field=field))
 
     def _apply_z(self, obj: SceneObject, field: str, value: float) -> None:
         z_min = value if field == "z_min" else obj.z_min
         z_max = value if field == "z_max" else obj.z_max
         if z_min >= z_max:
-            raise ValueError("z_min must be smaller than z_max")
+            raise ValueError(tr("error.z_order"))
         obj.z_min = z_min
         obj.z_max = z_max
 
@@ -535,7 +596,7 @@ class MainWindow(QMainWindow):
         if isinstance(obj, GdsLayerObject):
             data = self._gds_data.get(obj.id)
             if data is None:
-                raise ValueError("missing GDS polygon data")
+                raise ValueError(tr("error.missing_gds_polygons"))
             self.viewport.rebuild_geometry(obj, data.polygons, _gds_cache_key(data))
         else:
             self.viewport.rebuild_geometry(obj)
@@ -584,7 +645,7 @@ class MainWindow(QMainWindow):
                     max_y=obj.bounds.max_y,
                 )
             }
-        raise ValueError(f"unsupported property: {field}")
+        raise ValueError(tr("error.unsupported_property", field=field))
 
     def _restore_property_state(
         self, object_id: str, field: str, state: dict[str, object]
@@ -609,10 +670,10 @@ class MainWindow(QMainWindow):
         elif "bounds" in state and isinstance(obj, BaseplateObject):
             bounds = state["bounds"]
             if not isinstance(bounds, Bounds2D):
-                raise ValueError("invalid bounds state")
+                raise ValueError(tr("error.invalid_bounds_state"))
             obj.bounds = bounds
         else:
-            raise ValueError(f"unsupported property: {field}")
+            raise ValueError(tr("error.unsupported_property", field=field))
 
         self._sync_view_after_property(obj, field)
         self.component_tree.refresh_object(obj)
@@ -639,7 +700,7 @@ class MainWindow(QMainWindow):
             self.scene.add(obj)
             if isinstance(obj, GdsLayerObject):
                 if gds_data is None:
-                    raise ValueError("missing GDS data for restored object")
+                    raise ValueError(tr("error.missing_gds_data"))
                 self._gds_data[obj.id] = gds_data
                 self.viewport.add_or_update(
                     obj, gds_data.polygons, _gds_cache_key(gds_data)
@@ -661,9 +722,9 @@ class MainWindow(QMainWindow):
         try:
             self._is_restoring = True
             callback()
-            self.statusBar().showMessage(f"Undid {label}")
+            self.statusBar().showMessage(tr("status.undid", label=label))
         except Exception as exc:
-            self._show_error("Undo failed", str(exc))
+            self._show_error(tr("error.undo_failed"), str(exc))
         finally:
             self._is_restoring = False
 
@@ -702,7 +763,7 @@ class MainWindow(QMainWindow):
 
     def _next_baseplate_name(self) -> str:
         used_indices: set[int] = set()
-        prefix = "Baseplate "
+        prefix = tr("object.baseplate_prefix")
         for obj in self.scene.objects():
             if not isinstance(obj, BaseplateObject):
                 continue
@@ -741,29 +802,23 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(message)
         QMessageBox.warning(self, title, message)
 
-    def _export_view(
-        self,
-        title: str,
-        filter_text: str,
-        suffix: str,
-        export_func: Callable[[Path], None],
-    ) -> None:
-        default_name = f"project.{suffix}"
+    def _export_view(self, file_format: ExportFormat) -> None:
+        default_name = f"project.{file_format}"
         file_name, _ = QFileDialog.getSaveFileName(
             self,
-            title,
+            _export_title(file_format),
             str(Path.cwd() / default_name),
-            filter_text,
+            _export_filter(file_format),
         )
         if not file_name:
             return
 
-        path = self._ensure_suffix(Path(file_name), suffix)
+        path = self._ensure_suffix(Path(file_name), file_format)
         try:
-            export_func(path)
-            self.statusBar().showMessage(f"Exported {path.name}")
+            self._export_by_format(path, file_format)
+            self.statusBar().showMessage(tr("status.exported", name=path.name))
         except Exception as exc:
-            self._show_error("Export failed", str(exc))
+            self._show_error(tr("error.export_failed"), str(exc))
 
     def _write_project(self, file_path: Path) -> None:
         gds_paths = [
@@ -773,8 +828,20 @@ class MainWindow(QMainWindow):
         ]
         write_project_archive(file_path, self.scene.objects(), gds_paths)
 
-    def _export_pdf(self, file_path: Path) -> None:
-        export_scene_pdf(file_path, self.viewport, self.scene.objects())
+    def _export_by_format(self, file_path: Path, file_format: ExportFormat) -> None:
+        if file_format == "png":
+            self.viewport.export_png(file_path)
+            return
+        if file_format == "svg":
+            self.viewport.export_svg(file_path)
+            return
+        if file_format == "pdf":
+            export_scene_pdf(file_path, self.viewport, self.scene.objects())
+            return
+        if file_format == "gltf":
+            self.viewport.export_gltf(file_path)
+            return
+        raise ValueError(tr("error.unsupported_export_format", format=file_format))
 
     def _load_project(self, file_path: Path) -> None:
         archive_objects, gds_sources = read_project_archive(file_path)
@@ -819,7 +886,9 @@ class MainWindow(QMainWindow):
             source_key = str(payload["source_key"])
             temp_path = gds_paths.get(source_key)
             if temp_path is None:
-                raise ValueError(f"missing embedded GDS source: {source_key}")
+                raise ValueError(
+                    tr("error.missing_embedded_gds", source_key=source_key)
+                )
 
             file_info = inspect_gds_file(temp_path)
             selection = next(
@@ -834,11 +903,15 @@ class MainWindow(QMainWindow):
                 None,
             )
             if selection is None:
-                raise ValueError(f"unable to restore GDS layer: {source_key}")
+                raise ValueError(
+                    tr("error.unable_restore_gds_layer", source_key=source_key)
+                )
 
             layers = load_gds_layers(file_info.file_path, [selection])
             if not layers:
-                raise ValueError(f"unable to restore GDS layer: {source_key}")
+                raise ValueError(
+                    tr("error.unable_restore_gds_layer", source_key=source_key)
+                )
 
             layer = layers[0]
             obj = GdsLayerObject(
@@ -880,7 +953,9 @@ class MainWindow(QMainWindow):
                 visible=bool(payload["visible"]),
             )
 
-        raise ValueError(f"unsupported archive object kind: {archive_obj.kind}")
+        raise ValueError(
+            tr("error.unsupported_archive_kind", kind=archive_obj.kind)
+        )
 
     def _materialize_gds_sources(
         self, gds_sources: dict[str, bytes], temp_root: Path
@@ -924,9 +999,23 @@ def _settings_int(
     return max(minimum, min(number, maximum))
 
 
+def _file_filter(primary_key: str) -> str:
+    return f"{tr(primary_key)};;{tr('filter.all_files')}"
+
+
+def _export_filter(file_format: ExportFormat) -> str:
+    return _file_filter(f"filter.{file_format}")
+
+
+def _export_title(file_format: ExportFormat) -> str:
+    if file_format == "gltf":
+        return tr("dialog.export_scene")
+    return tr("dialog.export_view")
+
+
 def _merge_bounds(bounds: list[Bounds2D]) -> Bounds2D:
     if not bounds:
-        raise ValueError("cannot merge empty bounds")
+        raise ValueError(tr("error.bounds_empty"))
     return Bounds2D(
         min_x=min(bound.min_x for bound in bounds),
         min_y=min(bound.min_y for bound in bounds),

@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QTreeWidgetItem,
 )
 
+from i18n import tr
 from objects import SceneObject
 
 
@@ -61,7 +62,7 @@ class ComponentTree(QTreeWidget):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         header.resizeSection(1, 24)
 
-        self._root = QTreeWidgetItem(["Scene", ""])
+        self._root = QTreeWidgetItem([tr("scene.root"), ""])
         self._root.setData(0, OBJECT_ID_ROLE, None)
         self._root.setExpanded(True)
 
@@ -108,6 +109,9 @@ class ComponentTree(QTreeWidget):
             item.setToolTip(0, label)
             item.setData(1, VISIBLE_ROLE, obj.visible)
             item.setIcon(1, EYE_ICON if obj.visible else EYE_OFF_ICON)
+
+    def refresh_text(self) -> None:
+        self._root.setText(0, tr("scene.root"))
 
     def current_object_id(self) -> str | None:
         item = self.currentItem()
@@ -163,20 +167,24 @@ class ComponentTree(QTreeWidget):
 
         if isinstance(object_id, str):
             visible = bool(item.data(1, VISIBLE_ROLE))
-            label = "Show" if not visible else "Hide"
+            label = tr("context.show") if not visible else tr("context.hide")
             menu.addAction(
                 label,
                 lambda: self.visibility_changed.emit(object_id, not visible),
             )
-            menu.addAction("Delete", lambda: self.delete_requested.emit(object_id))
+            menu.addAction(
+                tr("action.delete"), lambda: self.delete_requested.emit(object_id)
+            )
         elif group is not None:
             visible = self._group_has_visible_child(item)
-            label = "Show Cell" if not visible else "Hide Cell"
+            label = tr("context.show_cell") if not visible else tr("context.hide_cell")
             menu.addAction(
                 label,
                 lambda: self.group_visibility_changed.emit(group, not visible),
             )
-            menu.addAction("Delete Cell", lambda: self.delete_requested.emit(group))
+            menu.addAction(
+                tr("context.delete_cell"), lambda: self.delete_requested.emit(group)
+            )
 
         if not menu.actions():
             return

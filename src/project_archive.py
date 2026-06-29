@@ -6,6 +6,7 @@ import zipfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from i18n import tr
 from objects import BaseplateObject, GdsLayerObject, SceneObject
 
 
@@ -25,7 +26,7 @@ def write_project_archive(
 ) -> None:
     path = file_path.expanduser().resolve()
     if path.suffix.lower() != ".gds3d":
-        raise ValueError("project archive must use .gds3d extension")
+        raise ValueError(tr("error.project_archive_requires_gds3d"))
 
     with zipfile.ZipFile(path, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         scene_payload = {
@@ -41,21 +42,21 @@ def read_project_archive(
 ) -> tuple[list[ProjectArchiveObject], dict[str, bytes]]:
     path = file_path.expanduser().resolve()
     if path.suffix.lower() != ".gds3d":
-        raise ValueError("selected file is not a .gds3d file")
+        raise ValueError(tr("error.selected_not_gds3d"))
 
     with zipfile.ZipFile(path) as zf:
         try:
             raw_scene = zf.read(SCENE_JSON_NAME)
         except KeyError as exc:
-            raise ValueError("project archive is missing scene.json") from exc
+            raise ValueError(tr("error.project_archive_missing_scene")) from exc
 
         payload = json.loads(raw_scene)
         if not isinstance(payload, dict):
-            raise ValueError("invalid project archive payload")
+            raise ValueError(tr("error.project_archive_invalid_payload"))
 
         objects = payload.get("objects")
         if not isinstance(objects, list):
-            raise ValueError("invalid project archive objects")
+            raise ValueError(tr("error.project_archive_invalid_objects"))
 
         archive_objects: list[ProjectArchiveObject] = []
         for item in objects:
@@ -103,16 +104,16 @@ def _serialize_object(obj: SceneObject) -> dict[str, object]:
         }
         return {"kind": obj.kind, "payload": payload}
 
-    raise TypeError(f"unsupported object type: {type(obj).__name__}")
+    raise TypeError(tr("error.unsupported_object_type", name=type(obj).__name__))
 
 
 def _deserialize_object(item: object) -> ProjectArchiveObject:
     if not isinstance(item, dict):
-        raise ValueError("invalid project archive object")
+        raise ValueError(tr("error.project_archive_invalid_object"))
     kind = item.get("kind")
     payload = item.get("payload")
     if not isinstance(kind, str) or not isinstance(payload, dict):
-        raise ValueError("invalid project archive object fields")
+        raise ValueError(tr("error.project_archive_invalid_fields"))
     return ProjectArchiveObject(kind=kind, payload=payload)
 
 
