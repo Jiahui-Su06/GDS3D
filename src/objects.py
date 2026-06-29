@@ -39,10 +39,12 @@ class Bounds2D:
 class GdsLayerObject:
     name: str
     file_path: Path
+    source_path: Path
     cell_name: str
     layer: int
     datatype: int
     bounds: Bounds2D
+    source_key: str = ""
     z_min: float = 0.0
     z_max: float = 15.0
     color: str = "#2D6CDF"

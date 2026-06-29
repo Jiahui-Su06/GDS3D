@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import gzip
 from collections import OrderedDict
+from pathlib import Path
 from typing import cast
 
 import gdstk
@@ -128,6 +130,15 @@ class Viewport(QWidget):
             self._selection_actor = None
         self.plotter.render()
 
+    def clear_scene(self) -> None:
+        for actor in list(self._actors.values()):
+            self.plotter.remove_actor(actor, reset_camera=False)
+        self._actors.clear()
+        if self._selection_actor is not None:
+            self.plotter.remove_actor(self._selection_actor, reset_camera=False)
+            self._selection_actor = None
+        self.plotter.render()
+
     def highlight_object(self, object_id: str | None) -> None:
         if self._selection_actor is not None:
             self.plotter.remove_actor(self._selection_actor, reset_camera=False)
@@ -189,6 +200,40 @@ class Viewport(QWidget):
         self.plotter.reset_camera()
         self.plotter.render()
 
+    def export_png(self, file_path: Path) -> None:
+        self.plotter.render()
+        self.plotter.screenshot(str(file_path), transparent_background=False)
+
+    def export_svg(self, file_path: Path) -> None:
+        self._export_gl2ps(file_path, "svg")
+        gz_path = file_path.with_name(file_path.name + ".gz")
+        if gz_path.exists():
+            with gzip.open(gz_path, "rb") as src, file_path.open("wb") as dst:
+                dst.write(src.read())
+            gz_path.unlink()
+
+    def export_pdf(self, file_path: Path) -> None:
+        self._export_gl2ps(file_path, "pdf")
+
+    def export_gltf(self, file_path: Path) -> None:
+        try:
+            export_gltf = self.plotter.export_gltf
+        except AttributeError:
+            export_gltf = None
+
+        if export_gltf is not None:
+            export_gltf(str(file_path))
+            return
+
+        from vtkmodules.vtkIOExportGLTF import vtkGLTFExporter
+
+        exporter = vtkGLTFExporter()
+        exporter.SetRenderWindow(self._render_window())
+        exporter.SetFileName(str(file_path))
+        if hasattr(exporter, "InlineDataOn"):
+            exporter.InlineDataOn()
+        exporter.Write()
+
     def closeEvent(self, event) -> None:  # noqa: N802
         self.plotter.close()
         super().closeEvent(event)
@@ -205,6 +250,29 @@ class Viewport(QWidget):
                 raise ValueError("GDS object requires polygon data")
             return make_gds_layer_mesh(obj, polygons)
         raise TypeError(f"unsupported object type: {type(obj).__name__}")
+
+    def _render_window(self):
+        render_window = getattr(self.plotter, "ren_win", None)
+        if render_window is None:
+            render_window = getattr(self.plotter, "render_window", None)
+        if render_window is None:
+            raise RuntimeError("render window is unavailable")
+        return render_window
+
+    def _export_gl2ps(self, file_path: Path, file_format: str) -> None:
+        from vtkmodules.vtkIOExportGL2PS import vtkGL2PSExporter
+
+        prefix = file_path.with_suffix("")
+        exporter = vtkGL2PSExporter()
+        exporter.SetRenderWindow(self._render_window())
+        exporter.SetFilePrefix(str(prefix))
+        if file_format == "svg":
+            exporter.SetFileFormatToSVG()
+        elif file_format == "pdf":
+            exporter.SetFileFormatToPDF()
+        else:
+            raise ValueError(f"unsupported export format: {file_format}")
+        exporter.Write()
 
 
 def _rgb_from_hex(value: str) -> tuple[float, float, float]:

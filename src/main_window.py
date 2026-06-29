@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from hashlib import sha1
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import Callable
 
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import (
     QFileDialog,
     QDockWidget,
+    QMenu,
     QMainWindow,
     QMessageBox,
 )
@@ -14,6 +18,8 @@ from component_tree import ComponentGroupInfo, ComponentTree
 from gds_import_dialog import GdsImportDialog
 from gds_loader import GdsLayerData, inspect_gds_file, load_gds_layers
 from objects import BaseplateObject, Bounds2D, GdsLayerObject, SceneObject
+from pdf_exporter import export_scene_pdf
+from project_archive import ProjectArchiveObject, read_project_archive, write_project_archive
 from property_panel import PropertyPanel
 from scene import Scene
 from ui_settings_dialog import (
@@ -28,12 +34,13 @@ from viewport import Viewport
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Draw3D")
+        self.setWindowTitle("GDS3D")
         self.resize(1280, 820)
 
         self.scene = Scene()
         self._gds_data: dict[str, GdsLayerData] = {}
-        self._settings = QSettings("Draw3D", "Draw3D")
+        self._project_temp_dir: TemporaryDirectory[str] | None = None
+        self._settings = QSettings("GDS3D", "GDS3D")
         self._ui_settings = self._load_ui_settings()
 
         self.viewport = Viewport(self)
@@ -76,10 +83,12 @@ class MainWindow(QMainWindow):
                 obj = GdsLayerObject(
                     name=f"L{data.layer}/{data.datatype}",
                     file_path=data.file_path,
+                    source_path=data.file_path,
                     cell_name=data.cell_name,
                     layer=data.layer,
                     datatype=data.datatype,
                     bounds=data.bounds,
+                    source_key=_gds_source_key(data.file_path),
                 )
                 self.scene.add(obj)
                 self._gds_data[obj.id] = data
@@ -91,6 +100,56 @@ class MainWindow(QMainWindow):
             )
         except Exception as exc:
             self._show_error("Import failed", str(exc))
+
+    def open_project(self) -> None:
+        file_name, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Project",
+            str(Path.cwd()),
+            "GDS3D Projects (*.gds3d);;All Files (*)",
+        )
+        if not file_name:
+            return
+
+        try:
+            self._load_project(Path(file_name))
+            self.statusBar().showMessage(f"Opened {Path(file_name).name}")
+        except Exception as exc:
+            self._show_error("Open project failed", str(exc))
+
+    def export_view_as_png(self) -> None:
+        self._export_view("Export View", "PNG Files (*.png)", "png", self.viewport.export_png)
+
+    def export_view_as_svg(self) -> None:
+        self._export_view("Export View", "SVG Files (*.svg)", "svg", self.viewport.export_svg)
+
+    def export_view_as_pdf(self) -> None:
+        self._export_view("Export View", "PDF Files (*.pdf)", "pdf", self._export_pdf)
+
+    def export_scene_as_gltf(self) -> None:
+        self._export_view(
+            "Export Scene",
+            "glTF Files (*.gltf)",
+            "gltf",
+            self.viewport.export_gltf,
+        )
+
+    def export_project_as_gds3d(self) -> None:
+        file_name, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Project",
+            str(Path.cwd() / "project.gds3d"),
+            "GDS3D Projects (*.gds3d);;All Files (*)",
+        )
+        if not file_name:
+            return
+
+        path = self._ensure_suffix(Path(file_name), "gds3d")
+        try:
+            self._write_project(path)
+            self.statusBar().showMessage(f"Exported {path.name}")
+        except Exception as exc:
+            self._show_error("Export failed", str(exc))
 
     def create_baseplate(self) -> None:
         bounds = self._default_baseplate_bounds()
@@ -155,7 +214,18 @@ class MainWindow(QMainWindow):
 
     def _create_menu_bar(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
+        file_menu.addAction("Open Project", self.open_project)
         file_menu.addAction("Import GDS", self.import_gds)
+        file_menu.addSeparator()
+
+        file_menu.addAction("Export", self.export_project_as_gds3d)
+
+        export_as_menu = QMenu("Export As", self)
+        export_as_menu.addAction("PNG", self.export_view_as_png)
+        export_as_menu.addAction("SVG", self.export_view_as_svg)
+        export_as_menu.addAction("PDF", self.export_view_as_pdf)
+        export_as_menu.addAction("glTF", self.export_scene_as_gltf)
+        file_menu.addMenu(export_as_menu)
 
         edit_menu = self.menuBar().addMenu("&Edit")
         edit_menu.addAction("Create Baseplate", self.create_baseplate)
@@ -428,9 +498,172 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(message)
         QMessageBox.warning(self, title, message)
 
+    def _export_view(
+        self,
+        title: str,
+        filter_text: str,
+        suffix: str,
+        export_func: Callable[[Path], None],
+    ) -> None:
+        default_name = f"project.{suffix}"
+        file_name, _ = QFileDialog.getSaveFileName(
+            self,
+            title,
+            str(Path.cwd() / default_name),
+            filter_text,
+        )
+        if not file_name:
+            return
+
+        path = self._ensure_suffix(Path(file_name), suffix)
+        try:
+            export_func(path)
+            self.statusBar().showMessage(f"Exported {path.name}")
+        except Exception as exc:
+            self._show_error("Export failed", str(exc))
+
+    def _write_project(self, file_path: Path) -> None:
+        gds_paths = [
+            obj.source_path
+            for obj in self.scene.objects()
+            if isinstance(obj, GdsLayerObject)
+        ]
+        write_project_archive(file_path, self.scene.objects(), gds_paths)
+
+    def _export_pdf(self, file_path: Path) -> None:
+        export_scene_pdf(file_path, self.viewport, self.scene.objects())
+
+    def _load_project(self, file_path: Path) -> None:
+        archive_objects, gds_sources = read_project_archive(file_path)
+        if self._project_temp_dir is not None:
+            self._project_temp_dir.cleanup()
+        self._project_temp_dir = TemporaryDirectory()
+        temp_root = Path(self._project_temp_dir.name)
+
+        self.scene = Scene()
+        self._gds_data.clear()
+        self.component_tree.clear()
+        self.viewport.clear_scene()
+        self.property_panel.show_scene_summary(0)
+
+        gds_paths = self._materialize_gds_sources(gds_sources, temp_root)
+        for archive_obj in archive_objects:
+            obj = self._restore_object(archive_obj, file_path, gds_paths)
+            self.scene.add(obj)
+            if isinstance(obj, GdsLayerObject):
+                data = self._gds_data[obj.id]
+                self.viewport.add_or_update(obj, data.polygons, _gds_cache_key(data))
+            else:
+                self.viewport.add_or_update(obj)
+            self.component_tree.add_object(obj)
+
+        self.viewport.reset_camera()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        if self._project_temp_dir is not None:
+            self._project_temp_dir.cleanup()
+            self._project_temp_dir = None
+        super().closeEvent(event)
+
+    def _restore_object(
+        self,
+        archive_obj: ProjectArchiveObject,
+        file_path: Path,
+        gds_paths: dict[str, Path],
+    ) -> SceneObject:
+        if archive_obj.kind == "gds_layer":
+            payload = archive_obj.payload
+            source_key = str(payload["source_key"])
+            temp_path = gds_paths.get(source_key)
+            if temp_path is None:
+                raise ValueError(f"missing embedded GDS source: {source_key}")
+
+            file_info = inspect_gds_file(temp_path)
+            selection = next(
+                (
+                    layer.selection
+                    for cell in file_info.cells
+                    if cell.name == str(payload["cell_name"])
+                    for layer in cell.layers
+                    if layer.selection.layer == int(payload["layer"])
+                    and layer.selection.datatype == int(payload["datatype"])
+                ),
+                None,
+            )
+            if selection is None:
+                raise ValueError(f"unable to restore GDS layer: {source_key}")
+
+            layers = load_gds_layers(file_info.file_path, [selection])
+            if not layers:
+                raise ValueError(f"unable to restore GDS layer: {source_key}")
+
+            layer = layers[0]
+            obj = GdsLayerObject(
+                name=str(payload["name"]),
+                file_path=file_path,
+                source_path=temp_path,
+                cell_name=str(payload["cell_name"]),
+                layer=int(payload["layer"]),
+                datatype=int(payload["datatype"]),
+                bounds=layer.bounds,
+                source_key=source_key,
+                z_min=float(payload["z_min"]),
+                z_max=float(payload["z_max"]),
+                color=str(payload["color"]),
+                brightness=float(payload["brightness"]),
+                opacity=float(payload["opacity"]),
+                visible=bool(payload["visible"]),
+            )
+            self._gds_data[obj.id] = layer
+            return obj
+
+        if archive_obj.kind == "baseplate":
+            payload = archive_obj.payload
+            bounds_dict = payload["bounds"]
+            bounds = Bounds2D(
+                min_x=float(bounds_dict["min_x"]),
+                min_y=float(bounds_dict["min_y"]),
+                max_x=float(bounds_dict["max_x"]),
+                max_y=float(bounds_dict["max_y"]),
+            )
+            return BaseplateObject(
+                name=str(payload["name"]),
+                bounds=bounds,
+                z_min=float(payload["z_min"]),
+                z_max=float(payload["z_max"]),
+                color=str(payload["color"]),
+                brightness=float(payload["brightness"]),
+                opacity=float(payload["opacity"]),
+                visible=bool(payload["visible"]),
+            )
+
+        raise ValueError(f"unsupported archive object kind: {archive_obj.kind}")
+
+    def _materialize_gds_sources(
+        self, gds_sources: dict[str, bytes], temp_root: Path
+    ) -> dict[str, Path]:
+        gds_paths: dict[str, Path] = {}
+        for source_name, raw in gds_sources.items():
+            temp_path = temp_root / source_name
+            temp_path.write_bytes(raw)
+            gds_paths[source_name] = temp_path
+        return gds_paths
+
+    @staticmethod
+    def _ensure_suffix(file_path: Path, suffix: str) -> Path:
+        if file_path.suffix.lower() == f".{suffix}":
+            return file_path
+        return file_path.with_suffix(f".{suffix}")
+
 
 def _gds_cache_key(data: GdsLayerData) -> tuple[str, str, int, int]:
     return (str(data.file_path), data.cell_name, data.layer, data.datatype)
+
+
+def _gds_source_key(file_path: Path) -> str:
+    resolved = file_path.expanduser().resolve()
+    digest = sha1(str(resolved).encode("utf-8")).hexdigest()[:12]
+    return f"{resolved.stem}-{digest}{resolved.suffix.lower()}"
 
 
 def _settings_int(
