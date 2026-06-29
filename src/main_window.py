@@ -3,7 +3,7 @@ from __future__ import annotations
 from hashlib import sha1
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Callable, Literal
+from typing import Callable
 
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 
 from component_tree import ComponentGroupInfo, ComponentTree
 from export_dialog import ExportDialog, ExportFormat as ExportDialogFormat
-from export_dialog import ExportQuality
+from export_dialog import ExportQuality, ExportSizePreset
 from gds_import_dialog import GdsImportDialog
 from gds_loader import GdsLayerData, inspect_gds_file, load_gds_layers
 from i18n import DEFAULT_LOCALE, SUPPORTED_LOCALES, locale, set_locale, tr
@@ -39,7 +39,7 @@ from ui_settings_dialog import (
 from viewport import Viewport
 
 
-ExportFormat = ExportDialogFormat | Literal["gltf"]
+ExportFormat = ExportDialogFormat
 UNDO_STACK_COUNT_MAX = 100
 LANGUAGE_LABEL_KEYS = {
     "en": "language.english",
@@ -61,6 +61,7 @@ class MainWindow(QMainWindow):
         self._is_restoring = False
         self._export_format: ExportFormat = "png"
         self._export_quality: ExportQuality = "standard"
+        self._export_size_preset: ExportSizePreset = "figure_4_3"
         self._settings = QSettings("GDS3D", "GDS3D")
         set_locale(self._load_locale())
         self._ui_settings = self._load_ui_settings()
@@ -177,6 +178,7 @@ class MainWindow(QMainWindow):
         dialog = ExportDialog(
             self._export_format,
             self._export_quality,
+            self._export_size_preset,
             self,
         )
         if dialog.exec() != ExportDialog.DialogCode.Accepted:
@@ -184,8 +186,9 @@ class MainWindow(QMainWindow):
 
         options = dialog.options()
         self._export_format = options.file_format
-        self._export_quality = _quality_from_scale(options.image_scale)
-        self._export_view(options.file_format, image_scale=options.image_scale)
+        self._export_quality = options.quality
+        self._export_size_preset = options.size_preset
+        self._export_view(options.file_format, image_size=options.image_size)
 
     def export_project_as_gds3d(self) -> None:
         file_name, _ = QFileDialog.getSaveFileName(
@@ -782,7 +785,7 @@ class MainWindow(QMainWindow):
 
     def _next_baseplate_name(self) -> str:
         used_indices: set[int] = set()
-        prefix = tr("object.baseplate_prefix")
+        prefix = "Baseplate "
         for obj in self.scene.objects():
             if not isinstance(obj, BaseplateObject):
                 continue
@@ -821,7 +824,11 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(message)
         QMessageBox.warning(self, title, message)
 
-    def _export_view(self, file_format: ExportFormat, image_scale: int = 1) -> None:
+    def _export_view(
+        self,
+        file_format: ExportFormat,
+        image_size: tuple[int, int] | None = None,
+    ) -> None:
         default_name = f"project.{file_format}"
         file_name, _ = QFileDialog.getSaveFileName(
             self,
@@ -834,7 +841,7 @@ class MainWindow(QMainWindow):
 
         path = self._ensure_suffix(Path(file_name), file_format)
         try:
-            self._export_by_format(path, file_format, image_scale)
+            self._export_by_format(path, file_format, image_size)
             self.statusBar().showMessage(tr("status.exported", name=path.name))
         except Exception as exc:
             self._show_error(tr("error.export_failed"), str(exc))
@@ -848,20 +855,23 @@ class MainWindow(QMainWindow):
         write_project_archive(file_path, self.scene.objects(), gds_paths)
 
     def _export_by_format(
-        self, file_path: Path, file_format: ExportFormat, image_scale: int
+        self,
+        file_path: Path,
+        file_format: ExportFormat,
+        image_size: tuple[int, int] | None,
     ) -> None:
         if file_format == "png":
-            self.viewport.export_png(file_path, image_scale=image_scale)
+            self.viewport.export_png(file_path, image_size=image_size)
             return
         if file_format == "svg":
-            self.viewport.export_svg(file_path)
+            self.viewport.export_svg(file_path, image_size=image_size)
             return
         if file_format == "pdf":
             export_scene_pdf(
                 file_path,
                 self.viewport,
                 self.scene.objects(),
-                image_scale=image_scale,
+                image_size=image_size,
             )
             return
         if file_format == "gltf":
@@ -1037,12 +1047,6 @@ def _export_title(file_format: ExportFormat) -> str:
     if file_format == "gltf":
         return tr("dialog.export_scene")
     return tr("dialog.export_view")
-
-
-def _quality_from_scale(image_scale: int) -> ExportQuality:
-    if image_scale >= 3:
-        return "high"
-    return "standard"
 
 
 def _merge_bounds(bounds: list[Bounds2D]) -> Bounds2D:

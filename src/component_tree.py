@@ -161,7 +161,7 @@ class ComponentTree(QTreeWidget):
         if item is None:
             return
 
-        menu = QMenu(self)
+        menu = QMenu(self.window())
         object_id = item.data(0, OBJECT_ID_ROLE)
         group = self._group_info(item)
 
