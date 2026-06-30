@@ -19,6 +19,9 @@ action.open_project:
 action.import_gds:
   en: Import GDS
   zh-CN: 导入 GDS
+action.import:
+  en: Import
+  zh-CN: 导入
 action.export_project:
   en: Export Project
   zh-CN: 导出项目
@@ -61,6 +64,19 @@ panel.properties:
 dialog.export_as:
   en: Export As
   zh-CN: 另存为
+dialog.import_gds:
+  en: Import GDS
+  zh-CN: 导入 GDS
+
+gds_import.layer_datatype:
+  en: "L%{layer}/%{datatype}"
+  zh-CN: "L%{layer}/%{datatype}"
+gds_import.polygons_count:
+  en: "%{count} polygons"
+  zh-CN: "%{count} 个多边形"
+gds_import.select_layer_warning:
+  en: Select at least one layer to import.
+  zh-CN: 请至少选择一个图层再导入。
 
 export.format:
   en: Format

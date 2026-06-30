@@ -73,6 +73,9 @@ impl eframe::App for Gds3dApp {
         if self.show_export_dialog {
             self.show_export_window(ui.ctx());
         }
+        if self.import_dialog.is_some() {
+            self.show_import_window(ui.ctx());
+        }
     }
 }
 
@@ -508,11 +511,139 @@ impl Gds3dApp {
         summary
     }
 
+    fn show_import_window(&mut self, ctx: &egui::Context) {
+        let mut open = true;
+        let mut should_cancel = false;
+        let mut import_request = None;
+
+        if let Some(state) = self.import_dialog.as_mut() {
+            egui::Window::new(t!("dialog.import_gds").as_ref())
+                .open(&mut open)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .collapsible(false)
+                .default_width(560.0)
+                .max_width(640.0)
+                .max_height(520.0)
+                .resizable(true)
+                .show(ctx, |ui| {
+                    let path = state.info.file_path.display().to_string();
+                    ui.add_sized(
+                        [ui.available_width(), ui.spacing().interact_size.y],
+                        egui::Label::new(path.clone()).truncate(),
+                    )
+                    .on_hover_text(path);
+                    ui.separator();
+
+                    egui::ScrollArea::vertical()
+                        .max_height(import_dialog_tree_height(&state.info))
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for cell in &state.info.cells {
+                                let layer_count = cell.layers.len();
+                                let checked_count = cell
+                                    .layers
+                                    .iter()
+                                    .filter(|layer| state.checked_layers.contains(&layer.selection))
+                                    .count();
+                                let mut cell_checked =
+                                    layer_count > 0 && checked_count == layer_count;
+                                let label = if checked_count > 0 && checked_count < layer_count {
+                                    format!("{} ({checked_count}/{layer_count})", cell.name)
+                                } else {
+                                    cell.name.clone()
+                                };
+
+                                ui.horizontal(|ui| {
+                                    let response = ui.checkbox(&mut cell_checked, label);
+                                    if response.changed() {
+                                        for layer in &cell.layers {
+                                            if cell_checked {
+                                                state
+                                                    .checked_layers
+                                                    .insert(layer.selection.clone());
+                                            } else {
+                                                state.checked_layers.remove(&layer.selection);
+                                            }
+                                        }
+                                        state.warning = None;
+                                    }
+                                });
+
+                                for layer in &cell.layers {
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(24.0);
+                                        let mut checked =
+                                            state.checked_layers.contains(&layer.selection);
+                                        let selection = &layer.selection;
+                                        let response = ui.checkbox(
+                                            &mut checked,
+                                            t!(
+                                                "gds_import.layer_datatype",
+                                                layer = selection.layer,
+                                                datatype = selection.datatype
+                                            )
+                                            .as_ref(),
+                                        );
+                                        if response.changed() {
+                                            if checked {
+                                                state.checked_layers.insert(selection.clone());
+                                            } else {
+                                                state.checked_layers.remove(selection);
+                                            }
+                                            state.warning = None;
+                                        }
+                                        ui.add_space(10.0);
+                                        ui.label(
+                                            t!(
+                                                "gds_import.polygons_count",
+                                                count = layer.polygon_count
+                                            )
+                                            .as_ref(),
+                                        );
+                                        ui.add_space(10.0);
+                                        ui.label(format_bounds(&layer.bounds));
+                                    });
+                                }
+                            }
+                        });
+
+                    if let Some(warning) = &state.warning {
+                        ui.separator();
+                        ui.colored_label(egui::Color32::from_rgb(180, 74, 60), warning);
+                    }
+
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        if ui.button(t!("action.import").as_ref()).clicked() {
+                            let selections = state.selected_layers();
+                            if selections.is_empty() {
+                                state.warning =
+                                    Some(t!("gds_import.select_layer_warning").to_string());
+                            } else {
+                                import_request = Some((state.info.file_path.clone(), selections));
+                            }
+                        }
+                        if ui.button(t!("action.cancel").as_ref()).clicked() {
+                            should_cancel = true;
+                        }
+                    });
+                });
+        }
+
+        if let Some((path, selections)) = import_request {
+            self.import_dialog = None;
+            self.import_selected_gds_layers(path, selections);
+        } else if should_cancel || !open {
+            self.import_dialog = None;
+        }
+    }
+
     fn show_export_window(&mut self, ctx: &egui::Context) {
         let mut open = self.show_export_dialog;
         let mut should_close = false;
         egui::Window::new(t!("dialog.export_as").as_ref())
             .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
@@ -661,6 +792,22 @@ fn include_bounds(target: &mut Option<Bounds2d>, bounds: &Bounds2d) {
             *target = Some(bounds.clone());
         }
     }
+}
+
+fn format_bounds(bounds: &Bounds2d) -> String {
+    format!(
+        "{:.2}, {:.2} - {:.2}, {:.2}",
+        bounds.min_x, bounds.min_y, bounds.max_x, bounds.max_y
+    )
+}
+
+fn import_dialog_tree_height(info: &model::GdsFileInfo) -> f32 {
+    let row_count = info
+        .cells
+        .iter()
+        .map(|cell| 1 + cell.layers.len())
+        .sum::<usize>();
+    (row_count as f32 * 28.0 + 8.0).clamp(96.0, 360.0)
 }
 
 fn settings_label_width<'a>(ui: &egui::Ui, labels: impl IntoIterator<Item = &'a str>) -> f32 {

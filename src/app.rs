@@ -43,6 +43,7 @@ pub struct Gds3dApp {
     status: String,
     export_settings: ExportSettings,
     show_export_dialog: bool,
+    import_dialog: Option<ImportDialogState>,
     left_panel_min_width: f32,
     right_panel_min_width: f32,
     locale: Locale,
@@ -126,6 +127,42 @@ impl PropertyEditState {
     }
 }
 
+struct ImportDialogState {
+    info: model::GdsFileInfo,
+    checked_layers: HashSet<model::GdsLayerSelection>,
+    warning: Option<String>,
+}
+
+impl ImportDialogState {
+    fn new(info: model::GdsFileInfo) -> Self {
+        let mut checked_layers = HashSet::new();
+        let layers = info
+            .cells
+            .iter()
+            .flat_map(|cell| cell.layers.iter())
+            .collect::<Vec<_>>();
+        if let [layer] = layers.as_slice() {
+            checked_layers.insert(layer.selection.clone());
+        }
+
+        Self {
+            info,
+            checked_layers,
+            warning: None,
+        }
+    }
+
+    fn selected_layers(&self) -> Vec<model::GdsLayerSelection> {
+        self.info
+            .cells
+            .iter()
+            .flat_map(|cell| cell.layers.iter())
+            .filter(|layer| self.checked_layers.contains(&layer.selection))
+            .map(|layer| layer.selection.clone())
+            .collect()
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Locale {
     English,
@@ -175,6 +212,7 @@ impl Gds3dApp {
             status: t!("status.ready").to_string(),
             export_settings: ExportSettings::default(),
             show_export_dialog: false,
+            import_dialog: None,
             left_panel_min_width: settings.left_panel_width,
             right_panel_min_width: settings.right_panel_width,
             locale,
@@ -194,14 +232,28 @@ impl Gds3dApp {
             return;
         };
 
-        let objects = match model::import_gds_layers(&path) {
+        match model::inspect_gds_file(&path) {
+            Ok(info) => {
+                self.import_dialog = Some(ImportDialogState::new(info));
+            }
+            Err(err) => {
+                self.status = t!("status.import_failed", error = err).to_string();
+            }
+        }
+    }
+
+    fn import_selected_gds_layers(
+        &mut self,
+        path: PathBuf,
+        selections: Vec<model::GdsLayerSelection>,
+    ) {
+        let objects = match model::import_gds_layer_selections(&path, &selections) {
             Ok(objects) => objects,
             Err(err) => {
                 self.status = t!("status.import_failed", error = err).to_string();
                 return;
             }
         };
-
         let mut object_ids = Vec::new();
         for obj in objects {
             let object_id = obj.id().to_owned();
@@ -270,7 +322,7 @@ impl Gds3dApp {
     }
 
     fn create_baseplate(&mut self) {
-        let bounds = self.scene.default_baseplate_bounds();
+        let bounds = self.scene.default_baseplate_bounds(&self.selection);
         let obj = model::new_baseplate(self.scene.next_baseplate_name(), bounds);
         let object_id = obj.id().to_owned();
         if let Err(err) = self.scene.add(obj) {
