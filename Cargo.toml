@@ -11,6 +11,7 @@ resolver = "3"
 
 [dependencies]
 anyhow = "1"
+crc32fast = "1.5"
 eframe = { version = "0.35", default-features = false, features = [
     "accesskit",
     "default_fonts",
@@ -20,6 +21,7 @@ eframe = { version = "0.35", default-features = false, features = [
 ] }
 gdsii = "0.2"
 gds3d-viewport = { path = "src/viewport" }
+flate2 = "1.1"
 indexmap = { version = "2", features = ["serde"] }
 lucide-icons = "1.22"
 rfd = "0.17"

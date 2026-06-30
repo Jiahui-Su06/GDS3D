@@ -1235,7 +1235,9 @@ name = "gds3d"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "crc32fast",
  "eframe",
+ "flate2",
  "gds3d-viewport",
  "gdsii",
  "indexmap",

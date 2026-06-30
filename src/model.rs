@@ -8,6 +8,8 @@ use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::archive::source_key_for_path;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Bounds2d {
     pub min_x: f32,
@@ -303,11 +305,7 @@ pub fn import_gds_layers(path: &Path) -> anyhow::Result<Vec<SceneObject>> {
         }
     }
 
-    let source_key = path
-        .file_stem()
-        .and_then(|name| name.to_str())
-        .unwrap_or("GDS")
-        .to_owned();
+    let source_key = source_key_for_path(path);
     let mut objects = Vec::new();
     for (key, geometry) in layers {
         objects.push(SceneObject::GdsLayer(GdsLayerObject {
@@ -463,7 +461,7 @@ mod tests {
     use super::{SceneObject, import_gds_layers};
 
     #[test]
-    fn imports_gds_boundaries_as_layer_objects() {
+    fn imports_gds_layers() {
         let objects = import_gds_layers(Path::new("models/AWG.gds")).expect("import sample GDS");
         assert!(!objects.is_empty());
         for obj in objects {

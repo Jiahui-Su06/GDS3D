@@ -1,6 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use eframe::egui::{self, Color32, FontId, Pos2, Rect, RichText, Sense, TextStyle, Vec2};
@@ -11,8 +11,11 @@ use gds3d_viewport::{
 use lucide_icons::Icon;
 use rust_i18n::t;
 
+use crate::archive::{self, ArchiveObject};
 use crate::export::{ExportFormat, ExportQuality, ExportSettings, ExportSizePreset};
-use crate::model::{self, CellKey, Scene, SceneObject, Selection};
+use crate::model::{
+    self, BaseplateObject, Bounds2d, CellKey, DisplayProperties, Scene, SceneObject, Selection,
+};
 
 const UNDO_STACK_MAX: usize = 100;
 const LUCIDE_FONT_FAMILY: &str = "lucide";
@@ -30,6 +33,7 @@ pub struct Gds3dApp {
     left_panel_min_width: f32,
     right_panel_min_width: f32,
     locale: Locale,
+    archive_temp_dir: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -85,6 +89,7 @@ impl Gds3dApp {
             left_panel_min_width: 240.0,
             right_panel_min_width: 300.0,
             locale: Locale::English,
+            archive_temp_dir: None,
         }
     }
 
@@ -129,19 +134,20 @@ impl Gds3dApp {
 
     fn open_project(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("GDS3D scene json", &["json"])
+            .add_filter("GDS3D archive", &["gds3d"])
             .pick_file()
         else {
             return;
         };
 
-        match read_scene_json(&path) {
+        match read_archive_scene(&path) {
             Ok(scene) => {
                 self.scene = scene;
                 self.viewport_scene_cache = ViewportSceneCache::default();
                 self.selection = Selection::Scene;
                 self.undo_stack.clear();
                 self.viewport.reset_camera();
+                self.archive_temp_dir = Some(archive_temp_dir(&path));
                 self.status = t!("status.opened", name = file_name(&path)).to_string();
             }
             Err(err) => {
@@ -152,13 +158,15 @@ impl Gds3dApp {
 
     fn export_project(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .set_file_name("project.scene.json")
+            .add_filter("GDS3D archive", &["gds3d"])
+            .set_file_name("project.gds3d")
             .save_file()
         else {
             return;
         };
 
-        match write_scene_json(&path, &self.scene) {
+        let path = ensure_suffix(path, "gds3d");
+        match write_archive_scene(&path, &self.scene) {
             Ok(()) => {
                 self.status = t!("status.exported", name = file_name(&path)).to_string();
             }
@@ -1013,20 +1021,196 @@ fn readonly_bounds(ui: &mut egui::Ui, bounds: &model::Bounds2d) {
     );
 }
 
-fn read_scene_json(path: &Path) -> anyhow::Result<Scene> {
-    let data = fs::read_to_string(path)?;
-    Ok(serde_json::from_str(&data)?)
-}
-
-fn write_scene_json(path: &Path, scene: &Scene) -> anyhow::Result<()> {
-    let data = serde_json::to_string_pretty(scene)?;
-    fs::write(path, data)?;
-    Ok(())
-}
-
 fn file_name(path: &Path) -> String {
     path.file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("<unnamed>")
         .to_owned()
+}
+
+fn read_archive_scene(path: &Path) -> anyhow::Result<Scene> {
+    let (objects, gds_sources) = archive::read_archive(path)?;
+    let temp_dir = archive_temp_dir(path);
+    fs::create_dir_all(&temp_dir)?;
+    let source_paths = materialize_gds_sources(&temp_dir, gds_sources)?;
+
+    let mut scene = Scene::default();
+    for archive_obj in objects {
+        let obj = restore_archive_object(&archive_obj, path, &source_paths)?;
+        scene.add(obj)?;
+    }
+    Ok(scene)
+}
+
+fn write_archive_scene(path: &Path, scene: &Scene) -> anyhow::Result<()> {
+    let objects: Vec<SceneObject> = scene.objects().cloned().collect();
+    archive::write_archive(path, &objects)
+}
+
+fn restore_archive_object(
+    archive_obj: &ArchiveObject,
+    archive_path: &Path,
+    source_paths: &HashMap<String, PathBuf>,
+) -> anyhow::Result<SceneObject> {
+    match archive_obj.kind.as_str() {
+        "gds_layer" => restore_gds_layer(archive_obj, archive_path, source_paths),
+        "baseplate" => restore_baseplate(archive_obj),
+        kind => anyhow::bail!("unsupported archive object kind: {kind}"),
+    }
+}
+
+fn restore_gds_layer(
+    archive_obj: &ArchiveObject,
+    archive_path: &Path,
+    source_paths: &HashMap<String, PathBuf>,
+) -> anyhow::Result<SceneObject> {
+    let payload = archive_obj
+        .payload
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("invalid GDS layer payload"))?;
+    let source_key = string_field(payload, "source_key")?;
+    let source_path = source_paths
+        .get(&source_key)
+        .ok_or_else(|| anyhow::anyhow!("missing embedded GDS source: {source_key}"))?;
+    let cell_name = string_field(payload, "cell_name")?;
+    let layer = i32_field(payload, "layer")?;
+    let datatype = i32_field(payload, "datatype")?;
+
+    let mut restored = model::import_gds_layers(source_path)?
+        .into_iter()
+        .find_map(|obj| match obj {
+            SceneObject::GdsLayer(layer_obj)
+                if layer_obj.cell_name == cell_name
+                    && layer_obj.layer == layer
+                    && layer_obj.datatype == datatype =>
+            {
+                Some(layer_obj)
+            }
+            _ => None,
+        })
+        .ok_or_else(|| anyhow::anyhow!("unable to restore GDS layer: {source_key}"))?;
+
+    restored.display = display_from_payload(payload)?;
+    restored.file_path = archive_path.to_path_buf();
+    restored.source_path = source_path.clone();
+    restored.source_key = source_key;
+    Ok(SceneObject::GdsLayer(restored))
+}
+
+fn restore_baseplate(archive_obj: &ArchiveObject) -> anyhow::Result<SceneObject> {
+    let payload = archive_obj
+        .payload
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("invalid baseplate payload"))?;
+    Ok(SceneObject::Baseplate(BaseplateObject {
+        id: model::new_object_id(),
+        display: display_from_payload(payload)?,
+        bounds: bounds_from_payload(payload)?,
+    }))
+}
+
+fn display_from_payload(
+    payload: &serde_json::Map<String, serde_json::Value>,
+) -> anyhow::Result<DisplayProperties> {
+    Ok(DisplayProperties {
+        name: string_field(payload, "name")?,
+        visible: bool_field(payload, "visible")?,
+        color: string_field(payload, "color")?,
+        brightness: f32_field(payload, "brightness")?,
+        opacity: f32_field(payload, "opacity")?,
+        z_min: f32_field(payload, "z_min")?,
+        z_max: f32_field(payload, "z_max")?,
+    })
+}
+
+fn bounds_from_payload(
+    payload: &serde_json::Map<String, serde_json::Value>,
+) -> anyhow::Result<Bounds2d> {
+    let bounds = payload
+        .get("bounds")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| anyhow::anyhow!("missing bounds"))?;
+    Ok(Bounds2d {
+        min_x: f32_field(bounds, "min_x")?,
+        min_y: f32_field(bounds, "min_y")?,
+        max_x: f32_field(bounds, "max_x")?,
+        max_y: f32_field(bounds, "max_y")?,
+    })
+}
+
+fn materialize_gds_sources(
+    temp_dir: &Path,
+    sources: HashMap<String, Vec<u8>>,
+) -> anyhow::Result<HashMap<String, PathBuf>> {
+    let mut paths = HashMap::new();
+    for (source_name, data) in sources {
+        let Some(file_name) = Path::new(&source_name).file_name() else {
+            anyhow::bail!("invalid embedded GDS source name: {source_name}");
+        };
+        let path = temp_dir.join(file_name);
+        fs::write(&path, data)?;
+        paths.insert(source_name, path);
+    }
+    Ok(paths)
+}
+
+fn archive_temp_dir(path: &Path) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "gds3d-{}",
+        archive::source_key_for_path(path).replace('.', "_")
+    ))
+}
+
+fn ensure_suffix(path: PathBuf, suffix: &str) -> PathBuf {
+    if path.extension().and_then(|value| value.to_str()) == Some(suffix) {
+        path
+    } else {
+        path.with_extension(suffix)
+    }
+}
+
+fn string_field(
+    payload: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> anyhow::Result<String> {
+    payload
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("missing string field: {field}"))
+}
+
+fn bool_field(
+    payload: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> anyhow::Result<bool> {
+    payload
+        .get(field)
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| anyhow::anyhow!("missing bool field: {field}"))
+}
+
+fn i32_field(
+    payload: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> anyhow::Result<i32> {
+    let value = payload
+        .get(field)
+        .and_then(serde_json::Value::as_i64)
+        .ok_or_else(|| anyhow::anyhow!("missing integer field: {field}"))?;
+    Ok(i32::try_from(value)?)
+}
+
+fn f32_field(
+    payload: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> anyhow::Result<f32> {
+    let value = payload
+        .get(field)
+        .and_then(serde_json::Value::as_f64)
+        .ok_or_else(|| anyhow::anyhow!("missing number field: {field}"))?;
+    if !value.is_finite() || value < f64::from(f32::MIN) || value > f64::from(f32::MAX) {
+        anyhow::bail!("invalid number field: {field}");
+    }
+    Ok(value as f32)
 }
