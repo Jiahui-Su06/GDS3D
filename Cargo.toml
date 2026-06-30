@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/gds3d"]
+resolver = "3"
