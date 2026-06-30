@@ -1,17 +1,19 @@
 mod app;
 mod export;
 mod model;
-mod viewport;
 
 use eframe::egui;
 
-rust_i18n::i18n!("locales", fallback = "en");
+rust_i18n::i18n!("src/assets/locales", fallback = "en");
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("GDS3D")
             .with_inner_size([1280.0, 820.0]),
+        renderer: eframe::Renderer::Wgpu,
+        depth_buffer: 24,
+        multisampling: gds3d_viewport::RECOMMENDED_MSAA_SAMPLES,
         ..Default::default()
     };
 

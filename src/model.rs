@@ -131,6 +131,8 @@ pub struct CellKey {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Scene {
     objects: IndexMap<String, SceneObject>,
+    #[serde(skip)]
+    revision: u64,
 }
 
 impl Scene {
@@ -140,11 +142,16 @@ impl Scene {
             anyhow::bail!("duplicate object id: {id}");
         }
         self.objects.insert(id, obj);
+        self.touch();
         Ok(())
     }
 
     pub fn remove(&mut self, object_id: &str) -> Option<SceneObject> {
-        self.objects.shift_remove(object_id)
+        let removed = self.objects.shift_remove(object_id);
+        if removed.is_some() {
+            self.touch();
+        }
+        removed
     }
 
     pub fn get(&self, object_id: &str) -> Option<&SceneObject> {
@@ -153,6 +160,10 @@ impl Scene {
 
     pub fn get_mut(&mut self, object_id: &str) -> Option<&mut SceneObject> {
         self.objects.get_mut(object_id)
+    }
+
+    pub fn touch(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
     }
 
     pub fn objects(&self) -> impl Iterator<Item = &SceneObject> {

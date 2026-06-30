@@ -1,14 +1,2 @@
-# Python-generated files
-__pycache__/
-.ruff_cache
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
-
-# Rust
 target/
-
-# Virtual environments
-.venv
+.DS_Store

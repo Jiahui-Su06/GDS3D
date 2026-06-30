@@ -1,0 +1,10 @@
+[package]
+name = "gds3d-viewport"
+version = "0.1.0"
+edition = "2024"
+description = "WGPU viewport for GDS3D."
+license = "MIT"
+
+[dependencies]
+bytemuck = { version = "1", features = ["derive"] }
+eframe = { version = "0.35", default-features = false, features = ["wgpu"] }

@@ -1,0 +1,1307 @@
+use std::sync::{Arc, Mutex};
+
+use eframe::egui::{self, Color32, Rect, Sense, Vec2};
+use eframe::{egui_wgpu, wgpu};
+
+const CAMERA_PITCH_MIN: f32 = -1.48;
+const CAMERA_PITCH_MAX: f32 = 1.48;
+const CAMERA_DISTANCE_FACTOR: f32 = 2.0;
+const CAMERA_ROTATE_SPEED: f32 = 0.003;
+const AXIS_LINE_WIDTH_PX: f32 = 2.0;
+const AXIS_GIZMO_MARGIN_PX: f32 = 52.0;
+const AXIS_GIZMO_LENGTH_PX: f32 = 36.0;
+const AXIS_GIZMO_LABEL_GAP_PX: f32 = 9.0;
+const SELECTION_LINE_WIDTH_PX: f32 = 2.0;
+const SELECTION_PAD_FACTOR: f32 = 0.0025;
+const BUFFER_SIZE_MIN: u64 = 1024;
+
+pub const RECOMMENDED_MSAA_SAMPLES: u16 = 4;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bounds2d {
+    pub min_x: f32,
+    pub min_y: f32,
+    pub max_x: f32,
+    pub max_y: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ViewportObject {
+    pub id: String,
+    pub bounds: Bounds2d,
+    pub color: String,
+    pub brightness: f32,
+    pub opacity: f32,
+    pub z_min: f32,
+    pub z_max: f32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ViewportScene {
+    pub objects: Vec<ViewportObject>,
+    pub selected_id: Option<String>,
+}
+
+impl ViewportScene {
+    pub fn object_count(&self) -> usize {
+        self.objects.len()
+    }
+}
+
+#[derive(Clone)]
+pub struct ViewportState {
+    pub show_axes: bool,
+    pub zoom: f32,
+    pub pan: Vec2,
+    pub yaw: f32,
+    pub pitch: f32,
+    renderer: Arc<Mutex<Option<WgpuViewport>>>,
+}
+
+impl Default for ViewportState {
+    fn default() -> Self {
+        Self {
+            show_axes: true,
+            zoom: 1.0,
+            pan: Vec2::ZERO,
+            yaw: -0.65,
+            pitch: 0.72,
+            renderer: Arc::new(Mutex::new(None)),
+        }
+    }
+}
+
+impl ViewportState {
+    pub fn new(render_state: Option<&egui_wgpu::RenderState>) -> Self {
+        let mut state = Self::default();
+        if let Some(render_state) = render_state {
+            let renderer = WgpuViewport::new(&render_state.device, render_state.target_format);
+            state.renderer = Arc::new(Mutex::new(Some(renderer)));
+        }
+        state
+    }
+
+    pub fn reset_camera(&mut self) {
+        self.zoom = 1.0;
+        self.pan = Vec2::ZERO;
+        self.yaw = -0.65;
+        self.pitch = 0.72;
+    }
+}
+
+pub fn show_viewport(
+    ui: &mut egui::Ui,
+    scene: &ViewportScene,
+    state: &mut ViewportState,
+    empty_label: &str,
+) {
+    let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::drag());
+    handle_camera_input(ui, &response, state);
+
+    ui.painter()
+        .rect_filled(rect, 0.0, Color32::from_rgb(248, 250, 252));
+
+    let request = RenderRequest::from_scene(scene, state, rect);
+    let callback = egui_wgpu::Callback::new_paint_callback(
+        rect,
+        ViewportCallback {
+            renderer: Arc::clone(&state.renderer),
+            request,
+        },
+    );
+    ui.painter().add(callback);
+
+    if state.show_axes {
+        paint_axis_labels(ui.painter(), rect, state, ui.ctx().pixels_per_point());
+    }
+
+    if scene.object_count() == 0 {
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            empty_label,
+            egui::FontId::proportional(14.0),
+            Color32::from_rgb(91, 101, 112),
+        );
+    }
+}
+
+fn handle_camera_input(ui: &egui::Ui, response: &egui::Response, state: &mut ViewportState) {
+    let shift_down = ui.input(|input| input.modifiers.shift);
+    if response.dragged_by(egui::PointerButton::Primary) && !shift_down {
+        let delta = response.drag_motion();
+        state.yaw = (state.yaw - delta.x * CAMERA_ROTATE_SPEED).rem_euclid(std::f32::consts::TAU);
+        state.pitch =
+            (state.pitch + delta.y * CAMERA_ROTATE_SPEED).clamp(CAMERA_PITCH_MIN, CAMERA_PITCH_MAX);
+    }
+    if response.dragged_by(egui::PointerButton::Secondary) || (response.dragged() && shift_down) {
+        state.pan += response.drag_delta();
+    }
+    if response.hovered() {
+        let (zoom_delta, scroll_y) =
+            ui.input(|input| (input.zoom_delta(), input.smooth_scroll_delta.y));
+        if scroll_y.abs() > f32::EPSILON {
+            let scroll_zoom = (scroll_y * 0.002).exp();
+            state.zoom = (state.zoom * scroll_zoom).clamp(0.12, 24.0);
+        } else if (zoom_delta - 1.0).abs() > f32::EPSILON {
+            state.zoom = (state.zoom * zoom_delta).clamp(0.12, 24.0);
+        }
+    }
+}
+
+fn paint_axis_labels(
+    painter: &egui::Painter,
+    rect: Rect,
+    state: &ViewportState,
+    pixels_per_point: f32,
+) {
+    let horizontal = state.pitch.cos();
+    let camera_direction = Vec3::new(
+        state.yaw.cos() * horizontal,
+        state.yaw.sin() * horizontal,
+        state.pitch.sin(),
+    );
+    let (right, up, _) = basis_from_forward(camera_direction * -1.0);
+    let origin = egui::pos2(
+        rect.left() + AXIS_GIZMO_MARGIN_PX / pixels_per_point,
+        rect.bottom() - AXIS_GIZMO_MARGIN_PX / pixels_per_point,
+    );
+    let length = AXIS_GIZMO_LENGTH_PX / pixels_per_point;
+    let label_gap = AXIS_GIZMO_LABEL_GAP_PX / pixels_per_point;
+    let pad = 8.0 / pixels_per_point;
+
+    for (label, direction, color) in [
+        (
+            "X",
+            Vec3::new(1.0, 0.0, 0.0),
+            Color32::from_rgb(196, 57, 57),
+        ),
+        (
+            "Y",
+            Vec3::new(0.0, 1.0, 0.0),
+            Color32::from_rgb(55, 132, 78),
+        ),
+        (
+            "Z",
+            Vec3::new(0.0, 0.0, 1.0),
+            Color32::from_rgb(57, 99, 196),
+        ),
+    ] {
+        let axis_x = direction.dot(right);
+        let axis_y = direction.dot(up);
+        let axis_len = (axis_x * axis_x + axis_y * axis_y).sqrt();
+        if axis_len <= f32::EPSILON {
+            continue;
+        }
+
+        let screen_dir = Vec2::new(axis_x / axis_len, -axis_y / axis_len);
+        let mut pos = origin + screen_dir * (length + label_gap);
+        pos.x = pos.x.clamp(rect.left() + pad, rect.right() - pad);
+        pos.y = pos.y.clamp(rect.top() + pad, rect.bottom() - pad);
+        painter.text(
+            pos,
+            egui::Align2::CENTER_CENTER,
+            label,
+            egui::FontId::monospace(11.0),
+            color,
+        );
+    }
+}
+
+struct ViewportCallback {
+    renderer: Arc<Mutex<Option<WgpuViewport>>>,
+    request: RenderRequest,
+}
+
+impl egui_wgpu::CallbackTrait for ViewportCallback {
+    fn prepare(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        screen_descriptor: &egui_wgpu::ScreenDescriptor,
+        _egui_encoder: &mut wgpu::CommandEncoder,
+        _callback_resources: &mut egui_wgpu::CallbackResources,
+    ) -> Vec<wgpu::CommandBuffer> {
+        if let Ok(mut guard) = self.renderer.lock()
+            && let Some(renderer) = guard.as_mut()
+        {
+            renderer.prepare(device, queue, screen_descriptor, &self.request);
+        }
+        Vec::new()
+    }
+
+    fn paint(
+        &self,
+        info: egui::PaintCallbackInfo,
+        render_pass: &mut wgpu::RenderPass<'static>,
+        _callback_resources: &egui_wgpu::CallbackResources,
+    ) {
+        let viewport = info.viewport_in_pixels();
+        if viewport.width_px == 0 || viewport.height_px == 0 {
+            return;
+        }
+        if let Ok(guard) = self.renderer.lock()
+            && let Some(renderer) = guard.as_ref()
+        {
+            renderer.paint(render_pass);
+        }
+    }
+}
+
+struct WgpuViewport {
+    pipeline: wgpu::RenderPipeline,
+    overlay_pipeline: wgpu::RenderPipeline,
+    uniform_buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    overlay_vertex_buffer: wgpu::Buffer,
+    overlay_index_buffer: wgpu::Buffer,
+    vertex_capacity_bytes: u64,
+    index_capacity_bytes: u64,
+    overlay_vertex_capacity_bytes: u64,
+    overlay_index_capacity_bytes: u64,
+    index_count: u32,
+    overlay_index_count: u32,
+}
+
+impl WgpuViewport {
+    fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("gds3d_viewport_shader"),
+            source: wgpu::ShaderSource::Wgsl(VIEWPORT_SHADER.into()),
+        });
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("gds3d_viewport_uniform"),
+            size: std::mem::size_of::<ViewUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("gds3d_viewport_bind_group_layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("gds3d_viewport_bind_group"),
+            layout: &bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            }],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("gds3d_viewport_pipeline_layout"),
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("gds3d_viewport_pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[ViewportVertex::layout()],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24Plus,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: RECOMMENDED_MSAA_SAMPLES as u32,
+                ..Default::default()
+            },
+            multiview_mask: None,
+            cache: None,
+        });
+        let overlay_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("gds3d_viewport_overlay_shader"),
+            source: wgpu::ShaderSource::Wgsl(OVERLAY_SHADER.into()),
+        });
+        let overlay_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("gds3d_viewport_overlay_pipeline_layout"),
+                bind_group_layouts: &[],
+                immediate_size: 0,
+            });
+        let overlay_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("gds3d_viewport_overlay_pipeline"),
+            layout: Some(&overlay_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &overlay_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[OverlayVertex::layout()],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &overlay_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24Plus,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: RECOMMENDED_MSAA_SAMPLES as u32,
+                ..Default::default()
+            },
+            multiview_mask: None,
+            cache: None,
+        });
+
+        let vertex_buffer = create_copy_buffer(
+            device,
+            "gds3d_viewport_vertex_buffer",
+            wgpu::BufferUsages::VERTEX,
+            BUFFER_SIZE_MIN,
+        );
+        let index_buffer = create_copy_buffer(
+            device,
+            "gds3d_viewport_index_buffer",
+            wgpu::BufferUsages::INDEX,
+            BUFFER_SIZE_MIN,
+        );
+        let overlay_vertex_buffer = create_copy_buffer(
+            device,
+            "gds3d_viewport_overlay_vertex_buffer",
+            wgpu::BufferUsages::VERTEX,
+            BUFFER_SIZE_MIN,
+        );
+        let overlay_index_buffer = create_copy_buffer(
+            device,
+            "gds3d_viewport_overlay_index_buffer",
+            wgpu::BufferUsages::INDEX,
+            BUFFER_SIZE_MIN,
+        );
+
+        Self {
+            pipeline,
+            overlay_pipeline,
+            uniform_buffer,
+            bind_group,
+            vertex_buffer,
+            index_buffer,
+            overlay_vertex_buffer,
+            overlay_index_buffer,
+            vertex_capacity_bytes: BUFFER_SIZE_MIN,
+            index_capacity_bytes: BUFFER_SIZE_MIN,
+            overlay_vertex_capacity_bytes: BUFFER_SIZE_MIN,
+            overlay_index_capacity_bytes: BUFFER_SIZE_MIN,
+            index_count: 0,
+            overlay_index_count: 0,
+        }
+    }
+
+    fn prepare(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        screen_descriptor: &egui_wgpu::ScreenDescriptor,
+        request: &RenderRequest,
+    ) {
+        let uniform = ViewUniform::from_request(request);
+        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniform));
+
+        let mesh = request.mesh();
+        self.index_count = mesh.indices.len() as u32;
+        if !mesh.vertices.is_empty() && !mesh.indices.is_empty() {
+            let vertex_size = std::mem::size_of_val(mesh.vertices.as_slice()) as u64;
+            if vertex_size > self.vertex_capacity_bytes {
+                self.vertex_capacity_bytes = next_buffer_size(vertex_size);
+                self.vertex_buffer = create_copy_buffer(
+                    device,
+                    "gds3d_viewport_vertex_buffer",
+                    wgpu::BufferUsages::VERTEX,
+                    self.vertex_capacity_bytes,
+                );
+            }
+            queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&mesh.vertices));
+
+            let index_size = std::mem::size_of_val(mesh.indices.as_slice()) as u64;
+            if index_size > self.index_capacity_bytes {
+                self.index_capacity_bytes = next_buffer_size(index_size);
+                self.index_buffer = create_copy_buffer(
+                    device,
+                    "gds3d_viewport_index_buffer",
+                    wgpu::BufferUsages::INDEX,
+                    self.index_capacity_bytes,
+                );
+            }
+            queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&mesh.indices));
+        }
+
+        let overlay = request.overlay_mesh(screen_descriptor.pixels_per_point);
+        self.overlay_index_count = overlay.indices.len() as u32;
+        if overlay.vertices.is_empty() || overlay.indices.is_empty() {
+            return;
+        }
+
+        let vertex_size = std::mem::size_of_val(overlay.vertices.as_slice()) as u64;
+        if vertex_size > self.overlay_vertex_capacity_bytes {
+            self.overlay_vertex_capacity_bytes = next_buffer_size(vertex_size);
+            self.overlay_vertex_buffer = create_copy_buffer(
+                device,
+                "gds3d_viewport_overlay_vertex_buffer",
+                wgpu::BufferUsages::VERTEX,
+                self.overlay_vertex_capacity_bytes,
+            );
+        }
+        queue.write_buffer(
+            &self.overlay_vertex_buffer,
+            0,
+            bytemuck::cast_slice(&overlay.vertices),
+        );
+
+        let index_size = std::mem::size_of_val(overlay.indices.as_slice()) as u64;
+        if index_size > self.overlay_index_capacity_bytes {
+            self.overlay_index_capacity_bytes = next_buffer_size(index_size);
+            self.overlay_index_buffer = create_copy_buffer(
+                device,
+                "gds3d_viewport_overlay_index_buffer",
+                wgpu::BufferUsages::INDEX,
+                self.overlay_index_capacity_bytes,
+            );
+        }
+        queue.write_buffer(
+            &self.overlay_index_buffer,
+            0,
+            bytemuck::cast_slice(&overlay.indices),
+        );
+    }
+
+    fn paint(&self, render_pass: &mut wgpu::RenderPass<'static>) {
+        if self.index_count > 0 {
+            render_pass.set_pipeline(&self.pipeline);
+            render_pass.set_bind_group(0, &self.bind_group, &[]);
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.draw_indexed(0..self.index_count, 0, 0..1);
+        }
+        if self.overlay_index_count > 0 {
+            render_pass.set_pipeline(&self.overlay_pipeline);
+            render_pass.set_vertex_buffer(0, self.overlay_vertex_buffer.slice(..));
+            render_pass.set_index_buffer(
+                self.overlay_index_buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            render_pass.draw_indexed(0..self.overlay_index_count, 0, 0..1);
+        }
+    }
+}
+
+fn create_copy_buffer(
+    device: &wgpu::Device,
+    label: &'static str,
+    usage: wgpu::BufferUsages,
+    size: u64,
+) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size,
+        usage: usage | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+fn next_buffer_size(size: u64) -> u64 {
+    size.next_power_of_two().max(BUFFER_SIZE_MIN)
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ViewUniform {
+    eye: [f32; 4],
+    center: [f32; 4],
+    right: [f32; 4],
+    up: [f32; 4],
+    forward: [f32; 4],
+    params: [f32; 4],
+}
+
+impl ViewUniform {
+    fn from_request(request: &RenderRequest) -> Self {
+        let (right, up, forward) = camera_basis(request.camera.eye, request.camera.target);
+        let half_height = (request.bounds.span() / request.camera.zoom).max(1.0) * 0.5;
+        let half_width = half_height * request.camera.aspect.max(0.1);
+        let near = 0.1;
+        let far = (request.bounds.span() * 8.0).max(1000.0);
+
+        Self {
+            eye: request.camera.eye.to_vec4(0.0),
+            center: request.camera.target.to_vec4(0.0),
+            right: right.to_vec4(0.0),
+            up: up.to_vec4(0.0),
+            forward: forward.to_vec4(0.0),
+            params: [half_width, half_height, near, far],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ViewportVertex {
+    position: [f32; 3],
+    color: [f32; 4],
+    normal: [f32; 3],
+    _pad: f32,
+}
+
+impl ViewportVertex {
+    const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4, 2 => Float32x3];
+
+    fn layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBUTES,
+        }
+    }
+
+    fn new(position: Vec3, normal: Vec3, color: [f32; 4]) -> Self {
+        Self {
+            position: position.to_array(),
+            color,
+            normal: normal.to_array(),
+            _pad: 0.0,
+        }
+    }
+}
+
+struct ViewportMesh {
+    vertices: Vec<ViewportVertex>,
+    indices: Vec<u32>,
+}
+
+impl ViewportMesh {
+    fn new() -> Self {
+        Self {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+        }
+    }
+
+    fn append(&mut self, mesh: &MeshRequest) {
+        let offset = self.vertices.len() as u32;
+        self.vertices.extend(mesh.vertices.iter().copied());
+        self.indices
+            .extend(mesh.indices.iter().map(|index| offset + index));
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct OverlayVertex {
+    position: [f32; 3],
+    color: [f32; 4],
+}
+
+impl OverlayVertex {
+    const ATTRIBUTES: [wgpu::VertexAttribute; 2] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4];
+
+    fn layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBUTES,
+        }
+    }
+
+    fn new(x: f32, y: f32, z: f32, color: [f32; 4]) -> Self {
+        Self {
+            position: [x, y, z],
+            color,
+        }
+    }
+}
+
+struct OverlayMesh {
+    vertices: Vec<OverlayVertex>,
+    indices: Vec<u32>,
+    width_px: f32,
+    height_px: f32,
+}
+
+impl OverlayMesh {
+    fn new(width_px: f32, height_px: f32) -> Self {
+        Self {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            width_px,
+            height_px,
+        }
+    }
+
+    fn append_line(&mut self, projection: &Projection, line: &LineRequest) {
+        let Some(from) = projection.project(line.from) else {
+            return;
+        };
+        let Some(to) = projection.project(line.to) else {
+            return;
+        };
+
+        self.append_projected_line(from, to, line.color, line.width_px);
+    }
+
+    fn append_axis_gizmo(&mut self, projection: &Projection) {
+        let origin = ProjectedPoint {
+            x: -1.0 + AXIS_GIZMO_MARGIN_PX * 2.0 / self.width_px,
+            y: -1.0 + AXIS_GIZMO_MARGIN_PX * 2.0 / self.height_px,
+        };
+        for (direction, color) in [
+            (Vec3::new(1.0, 0.0, 0.0), opaque_color(196, 57, 57)),
+            (Vec3::new(0.0, 1.0, 0.0), opaque_color(55, 132, 78)),
+            (Vec3::new(0.0, 0.0, 1.0), opaque_color(57, 99, 196)),
+        ] {
+            let x = direction.dot(projection.right);
+            let y = direction.dot(projection.up);
+            let length = (x * x + y * y).sqrt();
+            if length <= f32::EPSILON {
+                continue;
+            }
+            let end = ProjectedPoint {
+                x: origin.x + x / length * AXIS_GIZMO_LENGTH_PX * 2.0 / self.width_px,
+                y: origin.y + y / length * AXIS_GIZMO_LENGTH_PX * 2.0 / self.height_px,
+            };
+            self.append_projected_line(origin, end, color, AXIS_LINE_WIDTH_PX);
+        }
+    }
+
+    fn append_projected_line(
+        &mut self,
+        from: ProjectedPoint,
+        to: ProjectedPoint,
+        color: [f32; 4],
+        width_px: f32,
+    ) {
+        let dx_px = (to.x - from.x) * self.width_px * 0.5;
+        let dy_px = (to.y - from.y) * self.height_px * 0.5;
+        let length_px = (dx_px * dx_px + dy_px * dy_px).sqrt();
+        if length_px <= 0.5 {
+            return;
+        }
+
+        let half_width_px = width_px * 0.5;
+        let offset_x = (-dy_px / length_px) * half_width_px * 2.0 / self.width_px;
+        let offset_y = (dx_px / length_px) * half_width_px * 2.0 / self.height_px;
+        let depth = 0.0;
+        let base = self.vertices.len() as u32;
+        self.vertices.push(OverlayVertex::new(
+            from.x + offset_x,
+            from.y + offset_y,
+            depth,
+            color,
+        ));
+        self.vertices.push(OverlayVertex::new(
+            from.x - offset_x,
+            from.y - offset_y,
+            depth,
+            color,
+        ));
+        self.vertices.push(OverlayVertex::new(
+            to.x - offset_x,
+            to.y - offset_y,
+            depth,
+            color,
+        ));
+        self.vertices.push(OverlayVertex::new(
+            to.x + offset_x,
+            to.y + offset_y,
+            depth,
+            color,
+        ));
+        self.indices
+            .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LineRequest {
+    from: Vec3,
+    to: Vec3,
+    color: [f32; 4],
+    width_px: f32,
+}
+
+impl LineRequest {
+    fn new(from: Vec3, to: Vec3, color: [f32; 4], width_px: f32) -> Self {
+        Self {
+            from,
+            to,
+            color,
+            width_px,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct RenderRequest {
+    bounds: SceneBounds,
+    camera: CameraRequest,
+    show_axes: bool,
+    rect: Rect,
+    objects: Vec<MeshRequest>,
+    selection: Vec<LineRequest>,
+}
+
+impl RenderRequest {
+    fn from_scene(scene: &ViewportScene, state: &ViewportState, rect: Rect) -> Self {
+        let bounds = scene_bounds(scene).unwrap_or_default();
+        let mut objects = Vec::new();
+        let mut selected_lines = Vec::new();
+        for obj in &scene.objects {
+            objects.push(MeshRequest::object(obj));
+            if scene.selected_id.as_deref() == Some(obj.id.as_str()) {
+                selected_lines.extend(selection_lines(obj, &bounds));
+            }
+        }
+
+        Self {
+            bounds,
+            camera: CameraRequest::new(&bounds, state, rect),
+            show_axes: state.show_axes,
+            rect,
+            objects,
+            selection: selected_lines,
+        }
+    }
+
+    fn mesh(&self) -> ViewportMesh {
+        let mut mesh = ViewportMesh::new();
+        for object in &self.objects {
+            mesh.append(object);
+        }
+        mesh
+    }
+
+    fn overlay_mesh(&self, pixels_per_point: f32) -> OverlayMesh {
+        let width_px = (self.rect.width() * pixels_per_point).max(1.0);
+        let height_px = (self.rect.height() * pixels_per_point).max(1.0);
+        let projection = Projection::new(self);
+        let mut mesh = OverlayMesh::new(width_px, height_px);
+        for line in &self.selection {
+            mesh.append_line(&projection, line);
+        }
+        if self.show_axes {
+            mesh.append_axis_gizmo(&projection);
+        }
+        mesh
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CameraRequest {
+    eye: Vec3,
+    target: Vec3,
+    zoom: f32,
+    aspect: f32,
+}
+
+impl CameraRequest {
+    fn new(bounds: &SceneBounds, state: &ViewportState, rect: Rect) -> Self {
+        let center = bounds.center();
+        let span = bounds.span();
+        let horizontal = state.pitch.cos();
+        let direction = Vec3::new(
+            state.yaw.cos() * horizontal,
+            state.yaw.sin() * horizontal,
+            state.pitch.sin(),
+        );
+        let (right, up, _) = basis_from_forward(direction * -1.0);
+        let pan_x = state.pan.x / rect.width().max(1.0) * span / state.zoom;
+        let pan_y = state.pan.y / rect.height().max(1.0) * span / state.zoom;
+        let target = center - right * pan_x + up * pan_y;
+        Self {
+            eye: target + direction * span * CAMERA_DISTANCE_FACTOR,
+            target,
+            zoom: state.zoom,
+            aspect: rect.width().max(1.0) / rect.height().max(1.0),
+        }
+    }
+}
+
+struct Projection {
+    center: Vec3,
+    eye: Vec3,
+    right: Vec3,
+    up: Vec3,
+    forward: Vec3,
+    half_width: f32,
+    half_height: f32,
+    near: f32,
+    far: f32,
+}
+
+impl Projection {
+    fn new(request: &RenderRequest) -> Self {
+        let (right, up, forward) = camera_basis(request.camera.eye, request.camera.target);
+        let half_height = (request.bounds.span() / request.camera.zoom).max(1.0) * 0.5;
+        let half_width = half_height * request.camera.aspect.max(0.1);
+        Self {
+            center: request.camera.target,
+            eye: request.camera.eye,
+            right,
+            up,
+            forward,
+            half_width,
+            half_height,
+            near: 0.1,
+            far: (request.bounds.span() * 8.0).max(1000.0),
+        }
+    }
+
+    fn project(&self, point: Vec3) -> Option<ProjectedPoint> {
+        let rel = point - self.center;
+        let eye_rel = point - self.eye;
+        let depth = (eye_rel.dot(self.forward) - self.near) / (self.far - self.near);
+        if !depth.is_finite() {
+            return None;
+        }
+        Some(ProjectedPoint {
+            x: rel.dot(self.right) / self.half_width.max(0.001),
+            y: rel.dot(self.up) / self.half_height.max(0.001),
+        })
+    }
+}
+
+fn camera_basis(eye: Vec3, target: Vec3) -> (Vec3, Vec3, Vec3) {
+    basis_from_forward((target - eye).normalized())
+}
+
+fn basis_from_forward(forward: Vec3) -> (Vec3, Vec3, Vec3) {
+    let up_seed = if forward.z.abs() > 0.94 {
+        Vec3::new(0.0, 1.0, 0.0)
+    } else {
+        Vec3::new(0.0, 0.0, 1.0)
+    };
+    let right = forward.cross(up_seed).normalized();
+    let up = right.cross(forward).normalized();
+    (right, up, forward)
+}
+
+#[derive(Clone, Copy)]
+struct ProjectedPoint {
+    x: f32,
+    y: f32,
+}
+
+#[derive(Clone)]
+struct MeshRequest {
+    vertices: Vec<ViewportVertex>,
+    indices: Vec<u32>,
+}
+
+impl MeshRequest {
+    fn object(obj: &ViewportObject) -> Self {
+        box_mesh(
+            &obj.bounds,
+            obj.z_min,
+            obj.z_max,
+            parse_hex_color(&obj.color, obj.brightness, obj.opacity),
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Vec3 {
+    x: f32,
+    y: f32,
+    z: f32,
+}
+
+impl Vec3 {
+    fn new(x: f32, y: f32, z: f32) -> Self {
+        Self { x, y, z }
+    }
+
+    fn dot(self, rhs: Self) -> f32 {
+        self.x * rhs.x + self.y * rhs.y + self.z * rhs.z
+    }
+
+    fn cross(self, rhs: Self) -> Self {
+        Self {
+            x: self.y * rhs.z - self.z * rhs.y,
+            y: self.z * rhs.x - self.x * rhs.z,
+            z: self.x * rhs.y - self.y * rhs.x,
+        }
+    }
+
+    fn length(self) -> f32 {
+        self.dot(self).sqrt()
+    }
+
+    fn normalized(self) -> Self {
+        let length = self.length();
+        if length <= f32::EPSILON {
+            return Self::new(1.0, 0.0, 0.0);
+        }
+        self * (1.0 / length)
+    }
+
+    fn to_array(self) -> [f32; 3] {
+        [self.x, self.y, self.z]
+    }
+
+    fn to_vec4(self, w: f32) -> [f32; 4] {
+        [self.x, self.y, self.z, w]
+    }
+}
+
+impl std::ops::Add for Vec3 {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self::new(self.x + rhs.x, self.y + rhs.y, self.z + rhs.z)
+    }
+}
+
+impl std::ops::Sub for Vec3 {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self::new(self.x - rhs.x, self.y - rhs.y, self.z - rhs.z)
+    }
+}
+
+impl std::ops::Mul<f32> for Vec3 {
+    type Output = Self;
+
+    fn mul(self, rhs: f32) -> Self::Output {
+        Self::new(self.x * rhs, self.y * rhs, self.z * rhs)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SceneBounds {
+    min_x: f32,
+    min_y: f32,
+    min_z: f32,
+    max_x: f32,
+    max_y: f32,
+    max_z: f32,
+}
+
+impl Default for SceneBounds {
+    fn default() -> Self {
+        Self {
+            min_x: -500.0,
+            min_y: -350.0,
+            min_z: -20.0,
+            max_x: 500.0,
+            max_y: 350.0,
+            max_z: 120.0,
+        }
+    }
+}
+
+impl SceneBounds {
+    fn center(self) -> Vec3 {
+        Vec3::new(
+            (self.min_x + self.max_x) * 0.5,
+            (self.min_y + self.max_y) * 0.5,
+            (self.min_z + self.max_z) * 0.5,
+        )
+    }
+
+    fn span(self) -> f32 {
+        (self.max_x - self.min_x)
+            .max(self.max_y - self.min_y)
+            .max((self.max_z - self.min_z) * 3.0)
+            .max(1.0)
+    }
+}
+
+fn scene_bounds(scene: &ViewportScene) -> Option<SceneBounds> {
+    let mut bounds = None::<SceneBounds>;
+    for obj in &scene.objects {
+        let object_bounds = object_scene_bounds(&obj.bounds, obj.z_min, obj.z_max);
+        bounds = Some(match bounds {
+            None => object_bounds,
+            Some(current) => SceneBounds {
+                min_x: current.min_x.min(object_bounds.min_x),
+                min_y: current.min_y.min(object_bounds.min_y),
+                min_z: current.min_z.min(object_bounds.min_z),
+                max_x: current.max_x.max(object_bounds.max_x),
+                max_y: current.max_y.max(object_bounds.max_y),
+                max_z: current.max_z.max(object_bounds.max_z),
+            },
+        });
+    }
+    bounds
+}
+
+fn object_scene_bounds(bounds: &Bounds2d, z_min: f32, z_max: f32) -> SceneBounds {
+    SceneBounds {
+        min_x: bounds.min_x,
+        min_y: bounds.min_y,
+        min_z: z_min,
+        max_x: bounds.max_x,
+        max_y: bounds.max_y,
+        max_z: z_max,
+    }
+}
+
+fn box_mesh(bounds: &Bounds2d, z_min: f32, z_max: f32, color: [f32; 4]) -> MeshRequest {
+    let x0 = bounds.min_x;
+    let x1 = bounds.max_x;
+    let y0 = bounds.min_y;
+    let y1 = bounds.max_y;
+    let z0 = z_min.min(z_max);
+    let z1 = z_min.max(z_max);
+
+    let corners = [
+        Vec3::new(x0, y0, z0),
+        Vec3::new(x1, y0, z0),
+        Vec3::new(x1, y1, z0),
+        Vec3::new(x0, y1, z0),
+        Vec3::new(x0, y0, z1),
+        Vec3::new(x1, y0, z1),
+        Vec3::new(x1, y1, z1),
+        Vec3::new(x0, y1, z1),
+    ];
+    let mut mesh = MeshRequest {
+        vertices: Vec::with_capacity(24),
+        indices: Vec::with_capacity(36),
+    };
+    push_quad(
+        &mut mesh,
+        [corners[0], corners[3], corners[2], corners[1]],
+        Vec3::new(0.0, 0.0, -1.0),
+        color,
+    );
+    push_quad(
+        &mut mesh,
+        [corners[4], corners[5], corners[6], corners[7]],
+        Vec3::new(0.0, 0.0, 1.0),
+        color,
+    );
+    push_quad(
+        &mut mesh,
+        [corners[0], corners[1], corners[5], corners[4]],
+        Vec3::new(0.0, -1.0, 0.0),
+        color,
+    );
+    push_quad(
+        &mut mesh,
+        [corners[1], corners[2], corners[6], corners[5]],
+        Vec3::new(1.0, 0.0, 0.0),
+        color,
+    );
+    push_quad(
+        &mut mesh,
+        [corners[2], corners[3], corners[7], corners[6]],
+        Vec3::new(0.0, 1.0, 0.0),
+        color,
+    );
+    push_quad(
+        &mut mesh,
+        [corners[3], corners[0], corners[4], corners[7]],
+        Vec3::new(-1.0, 0.0, 0.0),
+        color,
+    );
+    mesh
+}
+
+fn push_quad(mesh: &mut MeshRequest, points: [Vec3; 4], normal: Vec3, color: [f32; 4]) {
+    let base = mesh.vertices.len() as u32;
+    for point in points {
+        mesh.vertices
+            .push(ViewportVertex::new(point, normal, color));
+    }
+    mesh.indices
+        .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+}
+
+fn selection_lines(obj: &ViewportObject, scene_bounds: &SceneBounds) -> Vec<LineRequest> {
+    let bounds = &obj.bounds;
+    let z0 = obj.z_min.min(obj.z_max);
+    let z1 = obj.z_min.max(obj.z_max);
+    let pad = (scene_bounds.span() * SELECTION_PAD_FACTOR).max(0.5);
+    let min = Vec3::new(bounds.min_x - pad, bounds.min_y - pad, z0 - pad);
+    let max = Vec3::new(bounds.max_x + pad, bounds.max_y + pad, z1 + pad);
+    let color = opaque_color(240, 180, 41);
+    let corners = [
+        Vec3::new(min.x, min.y, min.z),
+        Vec3::new(max.x, min.y, min.z),
+        Vec3::new(max.x, max.y, min.z),
+        Vec3::new(min.x, max.y, min.z),
+        Vec3::new(min.x, min.y, max.z),
+        Vec3::new(max.x, min.y, max.z),
+        Vec3::new(max.x, max.y, max.z),
+        Vec3::new(min.x, max.y, max.z),
+    ];
+    let edges = [
+        (0, 1),
+        (1, 2),
+        (2, 3),
+        (3, 0),
+        (4, 5),
+        (5, 6),
+        (6, 7),
+        (7, 4),
+        (0, 4),
+        (1, 5),
+        (2, 6),
+        (3, 7),
+    ];
+    edges
+        .iter()
+        .map(|(a, b)| LineRequest::new(corners[*a], corners[*b], color, SELECTION_LINE_WIDTH_PX))
+        .collect()
+}
+
+fn parse_hex_color(value: &str, brightness: f32, opacity: f32) -> [f32; 4] {
+    let hex = value.trim().trim_start_matches('#');
+    if hex.len() != 6 {
+        return opaque_color(45, 108, 223);
+    }
+
+    let Ok(rgb) = u32::from_str_radix(hex, 16) else {
+        return opaque_color(45, 108, 223);
+    };
+
+    let scale = brightness.clamp(0.0, 2.0);
+    [
+        channel_to_float(((rgb >> 16) & 0xff) as f32 * scale),
+        channel_to_float(((rgb >> 8) & 0xff) as f32 * scale),
+        channel_to_float((rgb & 0xff) as f32 * scale),
+        opacity.clamp(0.08, 1.0),
+    ]
+}
+
+fn opaque_color(r: u8, g: u8, b: u8) -> [f32; 4] {
+    [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
+}
+
+fn channel_to_float(value: f32) -> f32 {
+    value.round().clamp(0.0, 255.0) / 255.0
+}
+
+const VIEWPORT_SHADER: &str = r#"
+struct ViewUniform {
+    eye: vec4<f32>,
+    center: vec4<f32>,
+    right: vec4<f32>,
+    up: vec4<f32>,
+    forward: vec4<f32>,
+    params: vec4<f32>,
+};
+
+@group(0) @binding(0)
+var<uniform> view: ViewUniform;
+
+struct VertexInput {
+    @location(0) position: vec3<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) normal: vec3<f32>,
+};
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+};
+
+@vertex
+fn vs_main(input: VertexInput) -> VertexOutput {
+    let rel = input.position - view.center.xyz;
+    let eye_rel = input.position - view.eye.xyz;
+    let half_width = max(view.params.x, 0.001);
+    let half_height = max(view.params.y, 0.001);
+    let near = view.params.z;
+    let far = max(view.params.w, near + 1.0);
+    let depth = (dot(eye_rel, view.forward.xyz) - near) / (far - near);
+
+    let light = normalize(vec3<f32>(0.35, -0.45, 0.82));
+    let intensity = 0.58 + max(dot(normalize(input.normal), light), 0.0) * 0.42;
+
+    var out: VertexOutput;
+    out.position = vec4<f32>(
+        dot(rel, view.right.xyz) / half_width,
+        dot(rel, view.up.xyz) / half_height,
+        depth,
+        1.0,
+    );
+    out.color = vec4<f32>(input.color.rgb * intensity, input.color.a);
+    return out;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    return input.color;
+}
+"#;
+
+const OVERLAY_SHADER: &str = r#"
+struct VertexInput {
+    @location(0) position: vec3<f32>,
+    @location(1) color: vec4<f32>,
+};
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+};
+
+@vertex
+fn vs_main(input: VertexInput) -> VertexOutput {
+    var out: VertexOutput;
+    out.position = vec4<f32>(input.position, 1.0);
+    out.color = input.color;
+    return out;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    return input.color;
+}
+"#;

@@ -3,12 +3,14 @@ use std::fs;
 use std::path::Path;
 
 use eframe::egui::{self, Color32, FontId, Pos2, Rect, RichText, Sense, TextStyle, Vec2};
+use gds3d_viewport::{
+    self as viewport, Bounds2d as ViewportBounds2d, ViewportObject, ViewportScene, ViewportState,
+};
 use lucide_icons::Icon;
 use rust_i18n::t;
 
 use crate::export::{ExportFormat, ExportQuality, ExportSettings, ExportSizePreset};
 use crate::model::{self, CellKey, Scene, SceneObject, Selection};
-use crate::viewport::{self, ViewportState};
 
 const UNDO_STACK_MAX: usize = 100;
 const LUCIDE_FONT_FAMILY: &str = "lucide";
@@ -65,7 +67,7 @@ impl Gds3dApp {
             scene: Scene::default(),
             selection: Selection::Scene,
             collapsed_cells: HashSet::new(),
-            viewport: ViewportState::default(),
+            viewport: ViewportState::new(cc.wgpu_render_state.as_ref()),
             undo_stack: Vec::new(),
             status: t!("status.ready").to_string(),
             export_settings: ExportSettings::default(),
@@ -199,6 +201,7 @@ impl Gds3dApp {
                 let id = previous.id().to_owned();
                 if let Some(current) = self.scene.get_mut(&id) {
                     *current = previous;
+                    self.scene.touch();
                     self.selection = Selection::Object(id);
                 }
             }
@@ -206,6 +209,7 @@ impl Gds3dApp {
                 for (object_id, visible) in states {
                     if let Some(obj) = self.scene.get_mut(&object_id) {
                         obj.set_visible(visible);
+                        self.scene.touch();
                     }
                 }
             }
@@ -236,6 +240,7 @@ impl Gds3dApp {
             if let Some(obj) = self.scene.get_mut(&object_id) {
                 previous.push((object_id, obj.is_visible()));
                 obj.set_visible(visible);
+                self.scene.touch();
             }
         }
         if !previous.is_empty() {
@@ -250,6 +255,7 @@ impl Gds3dApp {
         };
         if after != &before {
             self.push_undo(UndoCommand::ReplaceObject(before));
+            self.scene.touch();
         }
     }
 }
@@ -262,7 +268,13 @@ impl eframe::App for Gds3dApp {
         self.show_right_panel(ui);
 
         egui::CentralPanel::default_margins().show(ui, |ui| {
-            viewport::show_viewport(ui, &self.scene, &self.selection, &mut self.viewport);
+            let viewport_scene = viewport_scene(&self.scene, &self.selection);
+            viewport::show_viewport(
+                ui,
+                &viewport_scene,
+                &mut self.viewport,
+                t!("viewport.empty").as_ref(),
+            );
         });
 
         if self.show_export_dialog {
@@ -434,6 +446,7 @@ impl Gds3dApp {
             let before = self.scene.get(object_id).cloned();
             if let Some(obj) = self.scene.get_mut(object_id) {
                 obj.set_visible(!visible);
+                self.scene.touch();
             }
             if let Some(before) = before {
                 self.replace_object_after_edit(before);
@@ -612,15 +625,51 @@ impl Gds3dApp {
     }
 }
 
+fn viewport_scene(scene: &Scene, selection: &Selection) -> ViewportScene {
+    let selected_id = match selection {
+        Selection::Object(id) => Some(id.clone()),
+        Selection::Scene | Selection::Cell(_) => None,
+    };
+    let objects = scene
+        .objects()
+        .filter(|obj| obj.is_visible())
+        .map(viewport_object)
+        .collect();
+    ViewportScene {
+        objects,
+        selected_id,
+    }
+}
+
+fn viewport_object(obj: &SceneObject) -> ViewportObject {
+    let bounds = obj.bounds();
+    let display = obj.display();
+    ViewportObject {
+        id: obj.id().to_owned(),
+        bounds: ViewportBounds2d {
+            min_x: bounds.min_x,
+            min_y: bounds.min_y,
+            max_x: bounds.max_x,
+            max_y: bounds.max_y,
+        },
+        color: display.color.clone(),
+        brightness: display.brightness,
+        opacity: display.opacity,
+        z_min: display.z_min,
+        z_max: display.z_max,
+    }
+}
+
 fn configure_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
         "noto_sans".to_owned(),
-        egui::FontData::from_static(include_bytes!("../../fonts/NotoSans-Regular.ttf")).into(),
+        egui::FontData::from_static(include_bytes!("assets/fonts/NotoSans-Regular.ttf")).into(),
     );
     fonts.font_data.insert(
         "noto_sans_cjk".to_owned(),
-        egui::FontData::from_static(include_bytes!("../../fonts/NotoSansCJKsc-Regular.otf")).into(),
+        egui::FontData::from_static(include_bytes!("assets/fonts/NotoSansCJKsc-Regular.otf"))
+            .into(),
     );
     fonts.font_data.insert(
         "lucide".to_owned(),
