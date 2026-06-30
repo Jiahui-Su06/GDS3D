@@ -1,5 +1,6 @@
 use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Vec2};
@@ -16,6 +17,13 @@ const AXIS_GIZMO_LABEL_GAP_PX: f32 = 9.0;
 const SELECTION_LINE_WIDTH_PX: f32 = 2.0;
 const SELECTION_PAD_FACTOR: f32 = 0.0025;
 const BUFFER_SIZE_MIN: u64 = 1024;
+const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+const PNG_COLOR_TYPE_RGBA: u8 = 6;
+const PNG_BIT_DEPTH_8: u8 = 8;
+const PNG_COMPRESSION_DEFLATE: u8 = 0;
+const PNG_FILTER_NONE: u8 = 0;
+const PNG_INTERLACE_NONE: u8 = 0;
+const RENDER_PIXELS_MAX: u64 = 64_000_000;
 
 pub const RECOMMENDED_MSAA_SAMPLES: u16 = 4;
 
@@ -66,6 +74,7 @@ pub struct ViewportState {
     pub pan: Vec2,
     pub yaw: f32,
     pub pitch: f32,
+    pub view_size: Vec2,
     last_drag_pos: Option<Pos2>,
     renderer: Arc<Mutex<Option<WgpuViewport>>>,
 }
@@ -78,6 +87,7 @@ impl Default for ViewportState {
             pan: Vec2::ZERO,
             yaw: -0.65,
             pitch: 0.72,
+            view_size: Vec2::new(1.0, 1.0),
             last_drag_pos: None,
             renderer: Arc::new(Mutex::new(None)),
         }
@@ -110,6 +120,7 @@ pub fn show_viewport(
     empty_label: &str,
 ) {
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::drag());
+    state.view_size = rect.size();
     handle_camera_input(ui, &response, state);
 
     ui.painter()
@@ -138,6 +149,223 @@ pub fn show_viewport(
             Color32::from_rgb(91, 101, 112),
         );
     }
+}
+
+/// Render the viewport scene from the current camera state into PNG bytes.
+pub fn render_view_png(
+    render_state: &egui_wgpu::RenderState,
+    scene: &ViewportScene,
+    state: &ViewportState,
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>, String> {
+    if width == 0 || height == 0 {
+        return Err("export image size must be non-zero".to_owned());
+    }
+    if u64::from(width) * u64::from(height) > RENDER_PIXELS_MAX {
+        return Err(format!("export image is too large: {width} x {height}"));
+    }
+
+    let capture_size = capture_size_for_canvas(width, height, state.view_size);
+    let capture_rgba =
+        render_view_rgba(render_state, scene, state, capture_size.0, capture_size.1)?;
+    let rgba = center_on_canvas(width, height, capture_size.0, capture_size.1, &capture_rgba)?;
+    encode_png(width, height, &rgba).map_err(|err| format!("encode png: {err}"))
+}
+
+/// Render the current viewport into a target-size RGBA canvas without PNG encoding.
+pub fn render_view_rgba_canvas(
+    render_state: &egui_wgpu::RenderState,
+    scene: &ViewportScene,
+    state: &ViewportState,
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>, String> {
+    if width == 0 || height == 0 {
+        return Err("export image size must be non-zero".to_owned());
+    }
+    if u64::from(width) * u64::from(height) > RENDER_PIXELS_MAX {
+        return Err(format!("export image is too large: {width} x {height}"));
+    }
+
+    let capture_size = capture_size_for_canvas(width, height, state.view_size);
+    let capture_rgba =
+        render_view_rgba(render_state, scene, state, capture_size.0, capture_size.1)?;
+    center_on_canvas(width, height, capture_size.0, capture_size.1, &capture_rgba)
+}
+
+/// Encode RGBA8 pixels as PNG bytes.
+pub fn encode_rgba_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    encode_png(width, height, rgba)
+}
+
+fn render_view_rgba(
+    render_state: &egui_wgpu::RenderState,
+    scene: &ViewportScene,
+    state: &ViewportState,
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>, String> {
+    if width == 0 || height == 0 {
+        return Err("capture size must be non-zero".to_owned());
+    }
+
+    let device = &render_state.device;
+    let queue = &render_state.queue;
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("gds3d_export_target"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: render_state.target_format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let msaa = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("gds3d_export_msaa"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: RECOMMENDED_MSAA_SAMPLES as u32,
+        dimension: wgpu::TextureDimension::D2,
+        format: render_state.target_format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let msaa_view = msaa.create_view(&wgpu::TextureViewDescriptor::default());
+    let depth = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("gds3d_export_depth"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: RECOMMENDED_MSAA_SAMPLES as u32,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Depth24Plus,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(width as f32, height as f32));
+    let request = RenderRequest::from_scene(scene, state, rect);
+    let screen_descriptor = egui_wgpu::ScreenDescriptor {
+        size_in_pixels: [width, height],
+        pixels_per_point: 1.0,
+    };
+    let mut renderer = WgpuViewport::new(device, render_state.target_format);
+    renderer.prepare(device, queue, &screen_descriptor, &request);
+
+    let bytes_per_pixel = 4_u32;
+    let row_bytes = width
+        .checked_mul(bytes_per_pixel)
+        .ok_or_else(|| "export image row is too large".to_owned())?;
+    let padded_row_bytes = align_to(row_bytes, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let buffer_size = u64::from(padded_row_bytes)
+        .checked_mul(u64::from(height))
+        .ok_or_else(|| "export image buffer is too large".to_owned())?;
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("gds3d_export_readback"),
+        size: buffer_size,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("gds3d_export_encoder"),
+    });
+    {
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("gds3d_export_render_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &msaa_view,
+                resolve_target: Some(&target_view),
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 248.0 / 255.0,
+                        g: 250.0 / 255.0,
+                        b: 252.0 / 255.0,
+                        a: 1.0,
+                    }),
+                    store: wgpu::StoreOp::Discard,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Discard,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        renderer.paint(&mut render_pass);
+    }
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: &target,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded_row_bytes),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    queue.submit([encoder.finish()]);
+
+    let (sender, receiver) = mpsc::channel();
+    readback.map_async(wgpu::MapMode::Read, .., move |result| {
+        let _ = sender.send(result);
+    });
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .map_err(|err| format!("wait for export render: {err}"))?;
+    receiver
+        .recv()
+        .map_err(|err| format!("wait for export readback: {err}"))?
+        .map_err(|err| format!("map export readback: {err}"))?;
+
+    let texture_format = render_state.target_format;
+    let mapped = readback.get_mapped_range(..);
+    let rgba_size = usize::try_from(u64::from(row_bytes) * u64::from(height))
+        .map_err(|_| "export image is too large".to_owned())?;
+    let row_stride =
+        usize::try_from(padded_row_bytes).map_err(|_| "invalid export row stride".to_owned())?;
+    let row_len = usize::try_from(row_bytes).map_err(|_| "invalid export row size".to_owned())?;
+    let mut rgba = Vec::with_capacity(rgba_size);
+    for row in mapped.chunks(row_stride) {
+        push_texture_row_as_rgba(&mut rgba, &row[..row_len], texture_format)?;
+    }
+    drop(mapped);
+    readback.unmap();
+
+    Ok(rgba)
 }
 
 fn handle_camera_input(ui: &egui::Ui, response: &egui::Response, state: &mut ViewportState) {
@@ -550,7 +778,7 @@ impl WgpuViewport {
         );
     }
 
-    fn paint(&self, render_pass: &mut wgpu::RenderPass<'static>) {
+    fn paint(&self, render_pass: &mut wgpu::RenderPass<'_>) {
         if self.index_count > 0 {
             render_pass.set_pipeline(&self.pipeline);
             render_pass.set_bind_group(0, &self.bind_group, &[]);
@@ -586,6 +814,151 @@ fn create_copy_buffer(
 
 fn next_buffer_size(size: u64) -> u64 {
     size.next_power_of_two().max(BUFFER_SIZE_MIN)
+}
+
+fn align_to(value: u32, alignment: u32) -> u32 {
+    debug_assert!(alignment.is_power_of_two());
+    let mask = alignment - 1;
+    (value + mask) & !mask
+}
+
+fn push_texture_row_as_rgba(
+    out: &mut Vec<u8>,
+    row: &[u8],
+    format: wgpu::TextureFormat,
+) -> Result<(), String> {
+    match format {
+        wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => {
+            out.extend_from_slice(row);
+            Ok(())
+        }
+        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb => {
+            for pixel in row.chunks_exact(4) {
+                out.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+            }
+            Ok(())
+        }
+        other => Err(format!("unsupported export texture format: {other:?}")),
+    }
+}
+
+fn capture_size_for_canvas(canvas_width: u32, canvas_height: u32, view_size: Vec2) -> (u32, u32) {
+    let viewport_width = view_size.x.max(1.0);
+    let viewport_height = view_size.y.max(1.0);
+    let viewport_ratio = viewport_width / viewport_height;
+    let canvas_ratio = canvas_width as f32 / canvas_height as f32;
+
+    if viewport_ratio >= canvas_ratio {
+        let capture_width = canvas_width;
+        let capture_height = ((capture_width as f32 / viewport_ratio).round() as u32).max(1);
+        (capture_width, capture_height)
+    } else {
+        let capture_height = canvas_height;
+        let capture_width = ((capture_height as f32 * viewport_ratio).round() as u32).max(1);
+        (capture_width, capture_height)
+    }
+}
+
+fn center_on_canvas(
+    canvas_width: u32,
+    canvas_height: u32,
+    image_width: u32,
+    image_height: u32,
+    image_rgba: &[u8],
+) -> Result<Vec<u8>, String> {
+    let canvas_width_usize =
+        usize::try_from(canvas_width).map_err(|_| "invalid canvas width".to_owned())?;
+    let canvas_height_usize =
+        usize::try_from(canvas_height).map_err(|_| "invalid canvas height".to_owned())?;
+    let image_width_usize =
+        usize::try_from(image_width).map_err(|_| "invalid image width".to_owned())?;
+    let image_height_usize =
+        usize::try_from(image_height).map_err(|_| "invalid image height".to_owned())?;
+    let image_stride = image_width_usize
+        .checked_mul(4)
+        .ok_or_else(|| "image row is too large".to_owned())?;
+    let image_size = image_stride
+        .checked_mul(image_height_usize)
+        .ok_or_else(|| "image is too large".to_owned())?;
+    if image_rgba.len() != image_size {
+        return Err("image buffer has invalid length".to_owned());
+    }
+
+    let canvas_stride = canvas_width_usize
+        .checked_mul(4)
+        .ok_or_else(|| "canvas row is too large".to_owned())?;
+    let canvas_size = canvas_stride
+        .checked_mul(canvas_height_usize)
+        .ok_or_else(|| "canvas is too large".to_owned())?;
+    let mut canvas = vec![255_u8; canvas_size];
+    let x_offset = (canvas_width_usize.saturating_sub(image_width_usize)) / 2;
+    let y_offset = (canvas_height_usize.saturating_sub(image_height_usize)) / 2;
+
+    for row in 0..image_height_usize {
+        let src_start = row * image_stride;
+        let src_end = src_start + image_stride;
+        let dst_start = (row + y_offset) * canvas_stride + x_offset * 4;
+        let dst_end = dst_start + image_stride;
+        if dst_end > canvas.len() {
+            return Err("image does not fit on export canvas".to_owned());
+        }
+        canvas[dst_start..dst_end].copy_from_slice(&image_rgba[src_start..src_end]);
+    }
+    Ok(canvas)
+}
+
+fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    let row_bytes = usize::try_from(width)
+        .map_err(|_| "invalid png width".to_owned())?
+        .checked_mul(4)
+        .ok_or_else(|| "png row is too large".to_owned())?;
+    let expected_len = row_bytes
+        .checked_mul(usize::try_from(height).map_err(|_| "invalid png height".to_owned())?)
+        .ok_or_else(|| "png image is too large".to_owned())?;
+    if rgba.len() != expected_len {
+        return Err("png pixel buffer has invalid length".to_owned());
+    }
+
+    let height_usize = usize::try_from(height).map_err(|_| "invalid png height".to_owned())?;
+    let mut raw = Vec::with_capacity(expected_len + height_usize);
+    for row in rgba.chunks_exact(row_bytes) {
+        raw.push(PNG_FILTER_NONE);
+        raw.extend_from_slice(row);
+    }
+
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+    std::io::Write::write_all(&mut encoder, &raw).map_err(|err| err.to_string())?;
+    let compressed = encoder.finish().map_err(|err| err.to_string())?;
+
+    let mut png = Vec::new();
+    png.extend_from_slice(PNG_SIGNATURE);
+    let mut ihdr = Vec::with_capacity(13);
+    ihdr.extend_from_slice(&width.to_be_bytes());
+    ihdr.extend_from_slice(&height.to_be_bytes());
+    ihdr.push(PNG_BIT_DEPTH_8);
+    ihdr.push(PNG_COLOR_TYPE_RGBA);
+    ihdr.push(PNG_COMPRESSION_DEFLATE);
+    ihdr.push(PNG_FILTER_NONE);
+    ihdr.push(PNG_INTERLACE_NONE);
+    write_png_chunk(&mut png, b"IHDR", &ihdr)?;
+    write_png_chunk(&mut png, b"IDAT", &compressed)?;
+    write_png_chunk(&mut png, b"IEND", &[])?;
+    Ok(png)
+}
+
+fn write_png_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) -> Result<(), String> {
+    out.extend_from_slice(
+        &u32::try_from(data.len())
+            .map_err(|_| "png chunk is too large".to_owned())?
+            .to_be_bytes(),
+    );
+    out.extend_from_slice(kind);
+    out.extend_from_slice(data);
+    let mut hasher = crc32fast::Hasher::new();
+    hasher.update(kind);
+    hasher.update(data);
+    out.extend_from_slice(&hasher.finalize().to_be_bytes());
+    Ok(())
 }
 
 #[repr(C)]

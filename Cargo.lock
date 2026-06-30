@@ -1254,8 +1254,10 @@ name = "gds3d-viewport"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "crc32fast",
  "earcutr",
  "eframe",
+ "flate2",
 ]
 
 [[package]]

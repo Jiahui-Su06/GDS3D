@@ -233,6 +233,9 @@ status.open_failed:
 status.exported:
   en: "Exported %{name}"
   zh-CN: "已导出 %{name}"
+status.exporting:
+  en: "Exporting %{name}"
+  zh-CN: "正在导出 %{name}"
 status.export_failed:
   en: "Export failed: %{error}"
   zh-CN: "导出失败：%{error}"

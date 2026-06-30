@@ -2,12 +2,14 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 
+use eframe::egui_wgpu;
 use gds3d_viewport::{ViewportObject, ViewportState};
 use rust_i18n::t;
 
 use crate::archive::{self, ArchiveObject};
-use crate::export::{ExportFormat, ExportQuality, ExportSettings, ExportSizePreset};
+use crate::export::{self, ExportFormat, ExportQuality, ExportSettings, ExportSizePreset};
 use crate::model::{
     self, BaseplateObject, Bounds2d, CellKey, DisplayProperties, Scene, SceneObject, Selection,
 };
@@ -38,12 +40,14 @@ pub struct Gds3dApp {
     selection: Selection,
     collapsed_cells: HashSet<CellKey>,
     viewport: ViewportState,
+    render_state: Option<egui_wgpu::RenderState>,
     viewport_scene_cache: ViewportSceneCache,
     undo_stack: Vec<UndoCommand>,
     status: String,
     export_settings: ExportSettings,
     show_export_dialog: bool,
     import_dialog: Option<ImportDialogState>,
+    export_task: Option<ExportTask>,
     left_panel_min_width: f32,
     right_panel_min_width: f32,
     locale: Locale,
@@ -88,6 +92,10 @@ enum UndoCommand {
 struct ViewportSceneCache {
     revision: Option<u64>,
     objects: Vec<ViewportObject>,
+}
+
+struct ExportTask {
+    receiver: mpsc::Receiver<anyhow::Result<PathBuf>>,
 }
 
 #[derive(Default)]
@@ -193,6 +201,28 @@ impl Locale {
 }
 
 impl Gds3dApp {
+    fn poll_export_task(&mut self) {
+        let Some(task) = self.export_task.as_ref() else {
+            return;
+        };
+        match task.receiver.try_recv() {
+            Ok(Ok(path)) => {
+                self.status = t!("status.exported", name = file_name(&path)).to_string();
+                self.export_task = None;
+            }
+            Ok(Err(err)) => {
+                self.status = t!("status.export_failed", error = err).to_string();
+                self.export_task = None;
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.status =
+                    t!("status.export_failed", error = "export worker disconnected").to_string();
+                self.export_task = None;
+            }
+        }
+    }
+
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         ui::configure_light_theme(&cc.egui_ctx);
         ui::configure_fonts(&cc.egui_ctx);
@@ -207,12 +237,14 @@ impl Gds3dApp {
             selection: Selection::Scene,
             collapsed_cells: HashSet::new(),
             viewport,
+            render_state: cc.wgpu_render_state.clone(),
             viewport_scene_cache: ViewportSceneCache::default(),
             undo_stack: Vec::new(),
             status: t!("status.ready").to_string(),
             export_settings: ExportSettings::default(),
             show_export_dialog: false,
             import_dialog: None,
+            export_task: None,
             left_panel_min_width: settings.left_panel_width,
             right_panel_min_width: settings.right_panel_width,
             locale,
@@ -319,6 +351,84 @@ impl Gds3dApp {
                 self.status = t!("status.export_failed", error = err).to_string();
             }
         }
+    }
+
+    fn export_scene_as(&mut self) -> bool {
+        let format = self.export_settings.format;
+        let extension = format.extension();
+        let default_file_name = format!("scene.{extension}");
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter(format.label(), &[extension])
+            .set_file_name(&default_file_name)
+            .save_file()
+        else {
+            return false;
+        };
+
+        let path = ensure_suffix(path, extension);
+        if format == ExportFormat::Png {
+            match self.start_view_png_export(path) {
+                Ok(()) => return true,
+                Err(err) => {
+                    self.status = t!("status.export_failed", error = err).to_string();
+                    return false;
+                }
+            }
+        }
+
+        let result = match format {
+            ExportFormat::Png => unreachable!("PNG export is handled above"),
+            ExportFormat::Svg | ExportFormat::Pdf | ExportFormat::Gltf => {
+                export::write_scene_export(&path, &self.scene, self.export_settings)
+            }
+        };
+
+        match result {
+            Ok(()) => {
+                self.status = t!("status.exported", name = file_name(&path)).to_string();
+                true
+            }
+            Err(err) => {
+                self.status = t!("status.export_failed", error = err).to_string();
+                false
+            }
+        }
+    }
+
+    fn start_view_png_export(&mut self, path: PathBuf) -> anyhow::Result<()> {
+        let Some(render_state) = self.render_state.as_ref() else {
+            anyhow::bail!("PNG export requires the WGPU renderer");
+        };
+        let Some((width, height)) = self.export_settings.image_size() else {
+            anyhow::bail!("PNG export requires an image size");
+        };
+        let render_state = render_state.clone();
+        let scene =
+            ui::viewport_scene(&self.scene, &self.selection, &mut self.viewport_scene_cache);
+        let viewport = self.viewport.clone();
+
+        let (sender, receiver) = mpsc::channel();
+        let path_for_worker = path.clone();
+        std::thread::spawn(move || {
+            let result = (|| -> anyhow::Result<PathBuf> {
+                let rgba = gds3d_viewport::render_view_rgba_canvas(
+                    &render_state,
+                    &scene,
+                    &viewport,
+                    width,
+                    height,
+                )
+                .map_err(|err| anyhow::anyhow!(err))?;
+                let png = gds3d_viewport::encode_rgba_png(width, height, &rgba)
+                    .map_err(|err| anyhow::anyhow!(err))?;
+                fs::write(&path_for_worker, png)?;
+                Ok(path_for_worker)
+            })();
+            let _ = sender.send(result);
+        });
+        self.export_task = Some(ExportTask { receiver });
+        self.status = t!("status.exporting", name = file_name(&path)).to_string();
+        Ok(())
     }
 
     fn create_baseplate(&mut self) {

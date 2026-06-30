@@ -52,6 +52,10 @@ impl Gds3dApp {
 
 impl eframe::App for Gds3dApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.poll_export_task();
+        if self.export_task.is_some() {
+            ui.ctx().request_repaint();
+        }
         self.apply_startup_theme(ui.ctx());
         self.nudge_startup_window(ui.ctx());
         self.show_menu(ui);
@@ -689,13 +693,14 @@ impl Gds3dApp {
 
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button(t!("action.export").as_ref()).clicked() {
-                        self.status = t!(
-                            "status.export_mapped",
-                            format = self.export_settings.format.label()
+                    if ui
+                        .add_enabled(
+                            self.export_task.is_none(),
+                            egui::Button::new(t!("action.export").as_ref()),
                         )
-                        .to_string();
-                        should_close = true;
+                        .clicked()
+                    {
+                        should_close = self.export_scene_as();
                     }
                     if ui.button(t!("action.cancel").as_ref()).clicked() {
                         should_close = true;
@@ -706,7 +711,7 @@ impl Gds3dApp {
     }
 }
 
-fn viewport_scene(
+pub(super) fn viewport_scene(
     scene: &Scene,
     selection: &Selection,
     cache: &mut ViewportSceneCache,
