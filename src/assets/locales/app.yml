@@ -138,6 +138,9 @@ property.cell:
 property.no_component_selected:
   en: No component selected
   zh-CN: 未选择组件
+property.basic:
+  en: Basic
+  zh-CN: 基本
 property.display:
   en: Display
   zh-CN: 显示
@@ -171,6 +174,12 @@ property.y_min:
 property.y_max:
   en: Y max
   zh-CN: Y 最大
+property.z_min:
+  en: Z min
+  zh-CN: Z 最小
+property.z_max:
+  en: Z max
+  zh-CN: Z 最大
 property.x_min_prefix:
   en: "X min "
   zh-CN: "X 最小 "

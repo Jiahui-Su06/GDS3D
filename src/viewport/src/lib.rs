@@ -650,9 +650,16 @@ impl ViewportMesh {
         }
     }
 
-    fn append(&mut self, mesh: &MeshRequest) {
+    fn append(&mut self, mesh: &MeshRequest, z_min: f32, z_max: f32) {
         let offset = self.vertices.len() as u32;
-        self.vertices.extend(mesh.vertices.iter().copied());
+        let z0 = z_min.min(z_max);
+        let z1 = z_min.max(z_max);
+        let z_scale = z1 - z0;
+        self.vertices.extend(mesh.vertices.iter().map(|vertex| {
+            let mut vertex = *vertex;
+            vertex.position[2] = z0 + vertex.position[2] * z_scale;
+            vertex
+        }));
         self.indices
             .extend(mesh.indices.iter().map(|index| offset + index));
     }
@@ -849,21 +856,31 @@ impl RenderRequest {
                 continue;
             }
             let object_key = object_mesh_key(object);
+            let color_key = object_color_key(object);
             let object_mesh = cache
                 .entry(object.id.clone())
                 .and_modify(|cached| {
                     if cached.key != object_key {
                         *cached = CachedObjectMesh {
                             key: object_key,
+                            color_key,
                             mesh: MeshRequest::object(object),
                         };
+                    } else if cached.color_key != color_key {
+                        cached.mesh.set_color(parse_hex_color(
+                            &object.color,
+                            object.brightness,
+                            object.opacity,
+                        ));
+                        cached.color_key = color_key;
                     }
                 })
                 .or_insert_with(|| CachedObjectMesh {
                     key: object_key,
+                    color_key,
                     mesh: MeshRequest::object(object),
                 });
-            mesh.append(&object_mesh.mesh);
+            mesh.append(&object_mesh.mesh, object.z_min, object.z_max);
         }
         mesh
     }
@@ -987,6 +1004,7 @@ struct MeshRequest {
 
 struct CachedObjectMesh {
     key: u64,
+    color_key: u64,
     mesh: MeshRequest,
 }
 
@@ -994,9 +1012,15 @@ impl MeshRequest {
     fn object(obj: &ViewportObject) -> Self {
         let color = parse_hex_color(&obj.color, obj.brightness, obj.opacity);
         if obj.polygons.is_empty() {
-            return box_mesh(&obj.bounds, obj.z_min, obj.z_max, color);
+            return box_mesh(&obj.bounds, 0.0, 1.0, color);
         }
-        polygon_mesh(&obj.polygons, obj.z_min, obj.z_max, color)
+        polygon_mesh(&obj.polygons, 0.0, 1.0, color)
+    }
+
+    fn set_color(&mut self, color: [f32; 4]) {
+        for vertex in &mut self.vertices {
+            vertex.color = color;
+        }
     }
 }
 
@@ -1007,13 +1031,16 @@ fn object_mesh_key(obj: &ViewportObject) -> u64 {
     hash_f32(&mut hasher, obj.bounds.min_y);
     hash_f32(&mut hasher, obj.bounds.max_x);
     hash_f32(&mut hasher, obj.bounds.max_y);
+    obj.polygons.as_ptr().hash(&mut hasher);
+    obj.polygons.len().hash(&mut hasher);
+    hasher.finish()
+}
+
+fn object_color_key(obj: &ViewportObject) -> u64 {
+    let mut hasher = DefaultHasher::new();
     obj.color.hash(&mut hasher);
     hash_f32(&mut hasher, obj.brightness);
     hash_f32(&mut hasher, obj.opacity);
-    hash_f32(&mut hasher, obj.z_min);
-    hash_f32(&mut hasher, obj.z_max);
-    obj.polygons.as_ptr().hash(&mut hasher);
-    obj.polygons.len().hash(&mut hasher);
     hasher.finish()
 }
 
