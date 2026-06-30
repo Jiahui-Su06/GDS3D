@@ -525,10 +525,10 @@ impl Gds3dApp {
                 .open(&mut open)
                 .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
                 .collapsible(false)
-                .default_width(560.0)
-                .max_width(640.0)
+                .default_width(500.0)
+                .max_width(540.0)
                 .max_height(520.0)
-                .resizable(true)
+                .resizable(false)
                 .show(ctx, |ui| {
                     let path = state.info.file_path.display().to_string();
                     ui.add_sized(
@@ -540,7 +540,7 @@ impl Gds3dApp {
 
                     egui::ScrollArea::vertical()
                         .max_height(import_dialog_tree_height(&state.info))
-                        .auto_shrink([false, false])
+                        .auto_shrink([false, true])
                         .show(ui, |ui| {
                             for cell in &state.info.cells {
                                 let layer_count = cell.layers.len();
@@ -597,15 +597,22 @@ impl Gds3dApp {
                                             state.warning = None;
                                         }
                                         ui.add_space(10.0);
-                                        ui.label(
-                                            t!(
-                                                "gds_import.polygons_count",
-                                                count = layer.polygon_count
-                                            )
-                                            .as_ref(),
+                                        ui.add_sized(
+                                            [94.0, ui.spacing().interact_size.y],
+                                            egui::Label::new(
+                                                t!(
+                                                    "gds_import.polygons_count",
+                                                    count = layer.polygon_count
+                                                )
+                                                .as_ref(),
+                                            ),
                                         );
                                         ui.add_space(10.0);
-                                        ui.label(format_bounds(&layer.bounds));
+                                        ui.add_sized(
+                                            [ui.available_width(), ui.spacing().interact_size.y],
+                                            egui::Label::new(format_bounds(&layer.bounds))
+                                                .truncate(),
+                                        );
                                     });
                                 }
                             }
@@ -617,7 +624,7 @@ impl Gds3dApp {
                     }
 
                     ui.separator();
-                    ui.horizontal(|ui| {
+                    centered_action_buttons(ui, |ui| {
                         if ui.button(t!("action.import").as_ref()).clicked() {
                             let selections = state.selected_layers();
                             if selections.is_empty() {
@@ -649,50 +656,59 @@ impl Gds3dApp {
             .open(&mut open)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .collapsible(false)
+            .default_width(220.0)
             .resizable(false)
             .show(ctx, |ui| {
-                egui::ComboBox::from_label(t!("export.format").as_ref())
-                    .selected_text(self.export_settings.format.label())
-                    .show_ui(ui, |ui| {
-                        for format in ExportFormat::ALL {
-                            ui.selectable_value(
-                                &mut self.export_settings.format,
-                                format,
-                                format.label(),
-                            );
-                        }
-                    });
+                export_combo_row(ui, t!("export.format").as_ref(), |ui| {
+                    egui::ComboBox::from_id_salt("export_format")
+                        .selected_text(self.export_settings.format.label())
+                        .show_ui(ui, |ui| {
+                            for format in ExportFormat::ALL {
+                                ui.selectable_value(
+                                    &mut self.export_settings.format,
+                                    format,
+                                    format.label(),
+                                );
+                            }
+                        });
+                });
 
                 if self.export_settings.format.needs_image_size() {
-                    egui::ComboBox::from_label(t!("export.size").as_ref())
-                        .selected_text(self.export_settings.size_preset.label())
-                        .show_ui(ui, |ui| {
-                            for preset in ExportSizePreset::ALL {
-                                ui.selectable_value(
-                                    &mut self.export_settings.size_preset,
-                                    preset,
-                                    preset.label(),
-                                );
-                            }
-                        });
-                    egui::ComboBox::from_label(t!("export.quality").as_ref())
-                        .selected_text(self.export_settings.quality.label())
-                        .show_ui(ui, |ui| {
-                            for quality in ExportQuality::ALL {
-                                ui.selectable_value(
-                                    &mut self.export_settings.quality,
-                                    quality,
-                                    quality.label(),
-                                );
-                            }
-                        });
+                    export_combo_row(ui, t!("export.size").as_ref(), |ui| {
+                        egui::ComboBox::from_id_salt("export_size")
+                            .selected_text(self.export_settings.size_preset.label())
+                            .show_ui(ui, |ui| {
+                                for preset in ExportSizePreset::ALL {
+                                    ui.selectable_value(
+                                        &mut self.export_settings.size_preset,
+                                        preset,
+                                        preset.label(),
+                                    );
+                                }
+                            });
+                    });
+                    export_combo_row(ui, t!("export.quality").as_ref(), |ui| {
+                        egui::ComboBox::from_id_salt("export_quality")
+                            .selected_text(self.export_settings.quality.label())
+                            .show_ui(ui, |ui| {
+                                for quality in ExportQuality::ALL {
+                                    ui.selectable_value(
+                                        &mut self.export_settings.quality,
+                                        quality,
+                                        quality.label(),
+                                    );
+                                }
+                            });
+                    });
                     if let Some((width, height)) = self.export_settings.image_size() {
-                        ui.label(format!("{width} x {height} px"));
+                        ui.vertical_centered(|ui| {
+                            ui.label(format!("{width} x {height} px"));
+                        });
                     }
                 }
 
                 ui.separator();
-                ui.horizontal(|ui| {
+                centered_action_buttons(ui, |ui| {
                     if ui
                         .add_enabled(
                             self.export_task.is_none(),
@@ -709,6 +725,21 @@ impl Gds3dApp {
             });
         self.show_export_dialog = open && !should_close;
     }
+}
+
+fn centered_action_buttons(ui: &mut egui::Ui, add_buttons: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal(add_buttons);
+}
+
+fn export_combo_row(ui: &mut egui::Ui, label: &str, add_control: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal(|ui| {
+        ui.set_min_width(200.0);
+        ui.add_sized(
+            [54.0, ui.spacing().interact_size.y],
+            egui::Label::new(label),
+        );
+        add_control(ui);
+    });
 }
 
 pub(super) fn viewport_scene(

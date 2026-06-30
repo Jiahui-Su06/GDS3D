@@ -375,10 +375,20 @@ impl Gds3dApp {
                 }
             }
         }
+        if format == ExportFormat::Svg {
+            match self.start_view_svg_export(path) {
+                Ok(()) => return true,
+                Err(err) => {
+                    self.status = t!("status.export_failed", error = err).to_string();
+                    return false;
+                }
+            }
+        }
 
         let result = match format {
             ExportFormat::Png => unreachable!("PNG export is handled above"),
-            ExportFormat::Svg | ExportFormat::Pdf | ExportFormat::Gltf => {
+            ExportFormat::Svg => unreachable!("SVG export is handled above"),
+            ExportFormat::Pdf | ExportFormat::Gltf => {
                 export::write_scene_export(&path, &self.scene, self.export_settings)
             }
         };
@@ -405,6 +415,7 @@ impl Gds3dApp {
         let render_state = render_state.clone();
         let scene =
             ui::viewport_scene(&self.scene, &self.selection, &mut self.viewport_scene_cache);
+        let scene = export_viewport_scene(scene);
         let viewport = self.viewport.clone();
 
         let (sender, receiver) = mpsc::channel();
@@ -422,6 +433,50 @@ impl Gds3dApp {
                 let png = gds3d_viewport::encode_rgba_png(width, height, &rgba)
                     .map_err(|err| anyhow::anyhow!(err))?;
                 fs::write(&path_for_worker, png)?;
+                Ok(path_for_worker)
+            })();
+            let _ = sender.send(result);
+        });
+        self.export_task = Some(ExportTask { receiver });
+        self.status = t!("status.exporting", name = file_name(&path)).to_string();
+        Ok(())
+    }
+
+    fn start_view_svg_export(&mut self, path: PathBuf) -> anyhow::Result<()> {
+        let Some(render_state) = self.render_state.as_ref() else {
+            anyhow::bail!("SVG export requires the WGPU renderer");
+        };
+        let Some((width, height)) = self.export_settings.image_size() else {
+            anyhow::bail!("SVG export requires an image size");
+        };
+        let render_state = render_state.clone();
+        let scene =
+            ui::viewport_scene(&self.scene, &self.selection, &mut self.viewport_scene_cache);
+        let scene = export_viewport_scene(scene);
+        let viewport = self.viewport.clone();
+        let title = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("scene")
+            .to_owned();
+
+        let (sender, receiver) = mpsc::channel();
+        let path_for_worker = path.clone();
+        std::thread::spawn(move || {
+            let result = (|| -> anyhow::Result<PathBuf> {
+                let rgba = gds3d_viewport::render_view_rgba_canvas(
+                    &render_state,
+                    &scene,
+                    &viewport,
+                    width,
+                    height,
+                )
+                .map_err(|err| anyhow::anyhow!(err))?;
+                let png = gds3d_viewport::encode_rgba_png(width, height, &rgba)
+                    .map_err(|err| anyhow::anyhow!(err))?;
+                let svg = gds3d_viewport::embedded_png_svg(width, height, &title, &png)
+                    .map_err(|err| anyhow::anyhow!(err))?;
+                fs::write(&path_for_worker, svg)?;
                 Ok(path_for_worker)
             })();
             let _ = sender.send(result);
@@ -578,6 +633,13 @@ fn clamp_ui_font_size(ui_font_size: f32) -> f32 {
     } else {
         UI_FONT_SIZE_DEFAULT
     }
+}
+
+fn export_viewport_scene(
+    mut scene: gds3d_viewport::ViewportScene,
+) -> gds3d_viewport::ViewportScene {
+    scene.selected_id = None;
+    scene
 }
 
 fn file_name(path: &Path) -> String {

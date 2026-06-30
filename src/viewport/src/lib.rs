@@ -199,6 +199,43 @@ pub fn encode_rgba_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, 
     encode_png(width, height, rgba)
 }
 
+/// Wrap PNG bytes in an SVG image element.
+pub fn embedded_png_svg(
+    width: u32,
+    height: u32,
+    title: &str,
+    png: &[u8],
+) -> Result<String, String> {
+    if width == 0 || height == 0 {
+        return Err("svg size must be non-zero".to_owned());
+    }
+    if u64::from(width) * u64::from(height) > RENDER_PIXELS_MAX {
+        return Err(format!("svg image is too large: {width} x {height}"));
+    }
+    if !png.starts_with(PNG_SIGNATURE) {
+        return Err("embedded svg image must be png data".to_owned());
+    }
+
+    let encoded = base64_encode(png);
+    let mut svg = String::new();
+    svg.push_str(r#"<?xml version="1.0" encoding="UTF-8"?>"#);
+    svg.push('\n');
+    svg.push_str(&format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">"#
+    ));
+    svg.push('\n');
+    svg.push_str("  <title>");
+    push_xml_escaped(&mut svg, title);
+    svg.push_str("</title>\n");
+    svg.push_str(r##"  <rect width="100%" height="100%" fill="#FFFFFF"/>"##);
+    svg.push('\n');
+    svg.push_str(&format!(
+        r#"  <image x="0" y="0" width="{width}" height="{height}" href="data:image/png;base64,{encoded}" preserveAspectRatio="none"/>"#
+    ));
+    svg.push_str("\n</svg>\n");
+    Ok(svg)
+}
+
 fn render_view_rgba(
     render_state: &egui_wgpu::RenderState,
     scene: &ViewportScene,
@@ -905,6 +942,44 @@ fn center_on_canvas(
         canvas[dst_start..dst_end].copy_from_slice(&image_rgba[src_start..src_end]);
     }
     Ok(canvas)
+}
+
+fn push_xml_escaped(out: &mut String, value: &str) {
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(ch),
+        }
+    }
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = chunk.get(1).copied().unwrap_or(0);
+        let b2 = chunk.get(2).copied().unwrap_or(0);
+
+        out.push(TABLE[(b0 >> 2) as usize] as char);
+        out.push(TABLE[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[(b2 & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
 }
 
 fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
