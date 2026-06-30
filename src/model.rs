@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use gdsii::parser::{Element, GdsEvent, GdsParser};
 use gdsii::types::GdsPoint;
 use indexmap::IndexMap;
-use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -224,11 +223,26 @@ impl Scene {
     }
 
     pub fn next_baseplate_name(&self) -> String {
-        let count = self
-            .objects()
-            .filter(|obj| matches!(obj, SceneObject::Baseplate(_)))
-            .count();
-        t!("object.baseplate_name", index = count + 1).to_string()
+        let prefix = "Baseplate ";
+        let mut used_indices = std::collections::HashSet::new();
+        for obj in self.objects() {
+            let SceneObject::Baseplate(baseplate) = obj else {
+                continue;
+            };
+            let Some(suffix) = baseplate.display.name.strip_prefix(prefix) else {
+                continue;
+            };
+            let Ok(index) = suffix.parse::<usize>() else {
+                continue;
+            };
+            used_indices.insert(index);
+        }
+
+        let mut index = 1;
+        while used_indices.contains(&index) {
+            index += 1;
+        }
+        format!("{prefix}{index}")
     }
 
     pub fn cell_groups(&self) -> Vec<CellGroup> {
@@ -491,7 +505,7 @@ fn is_metadata_cell(name: &str) -> bool {
 mod tests {
     use std::path::Path;
 
-    use super::{SceneObject, import_gds_layers};
+    use super::{Bounds2d, Scene, SceneObject, import_gds_layers, new_baseplate};
 
     #[test]
     fn imports_gds_layers() {
@@ -506,5 +520,26 @@ mod tests {
             assert!(layer.bounds.min_x < layer.bounds.max_x);
             assert!(layer.bounds.min_y < layer.bounds.max_y);
         }
+    }
+
+    #[test]
+    fn uses_stable_english_baseplate_names() {
+        let mut scene = Scene::default();
+        assert_eq!(scene.next_baseplate_name(), "Baseplate 1");
+
+        let bounds = Bounds2d {
+            min_x: -1.0,
+            min_y: -1.0,
+            max_x: 1.0,
+            max_y: 1.0,
+        };
+        scene
+            .add(new_baseplate("Baseplate 1", bounds.clone()))
+            .expect("add first baseplate");
+        scene
+            .add(new_baseplate("Baseplate 3", bounds))
+            .expect("add third baseplate");
+
+        assert_eq!(scene.next_baseplate_name(), "Baseplate 2");
     }
 }

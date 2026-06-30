@@ -5,7 +5,7 @@ mod model;
 
 use eframe::egui;
 
-rust_i18n::i18n!("src/assets/locales", fallback = "en");
+rust_i18n::i18n!("src/locales", fallback = "en");
 
 const INITIAL_WINDOW_SIZE: [f32; 2] = [1280.0, 820.0];
 
