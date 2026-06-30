@@ -5,6 +5,8 @@ import sys
 
 
 os.environ.setdefault("QT_API", "pyside6")
+if sys.platform.startswith("linux"):
+    os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
 
 def main() -> int:
