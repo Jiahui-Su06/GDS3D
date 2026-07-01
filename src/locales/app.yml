@@ -1,0 +1,282 @@
+_version: 2
+
+menu.file:
+  en: File
+  zh-CN: 文件
+menu.edit:
+  en: Edit
+  zh-CN: 编辑
+menu.settings:
+  en: Settings
+  zh-CN: 设置
+menu.language:
+  en: Language
+  zh-CN: 语言
+
+action.open_project:
+  en: Open Project
+  zh-CN: 打开项目
+action.import_gds:
+  en: Import GDS
+  zh-CN: 导入 GDS
+action.import:
+  en: Import
+  zh-CN: 导入
+action.export_project:
+  en: Export Project
+  zh-CN: 导出项目
+action.export_as:
+  en: Export As
+  zh-CN: 另存为
+action.export:
+  en: Export
+  zh-CN: 导出
+action.cancel:
+  en: Cancel
+  zh-CN: 取消
+action.undo:
+  en: Undo
+  zh-CN: 撤销
+action.create_baseplate:
+  en: Create Baseplate
+  zh-CN: 创建基底
+action.delete:
+  en: Delete
+  zh-CN: 删除
+action.reset_camera:
+  en: Reset Camera
+  zh-CN: 重置相机
+
+setting.show_axes:
+  en: Show axes
+  zh-CN: 显示坐标轴
+setting.ui_font_size:
+  en: font size
+  zh-CN: 字体大小
+
+panel.scene:
+  en: Scene
+  zh-CN: 场景
+panel.properties:
+  en: Properties
+  zh-CN: 属性
+
+dialog.export_as:
+  en: Export As
+  zh-CN: 另存为
+dialog.import_gds:
+  en: Import GDS
+  zh-CN: 导入 GDS
+
+gds_import.layer_datatype:
+  en: "L%{layer}/%{datatype}"
+  zh-CN: "L%{layer}/%{datatype}"
+gds_import.polygons_count:
+  en: "%{count} polygons"
+  zh-CN: "%{count} 个多边形"
+gds_import.select_layer_warning:
+  en: Select at least one layer to import.
+  zh-CN: 请至少选择一个图层再导入。
+
+export.format:
+  en: Format
+  zh-CN: 格式
+export.format_png:
+  en: PNG
+  zh-CN: PNG
+export.format_svg:
+  en: SVG
+  zh-CN: SVG
+export.format_pdf:
+  en: PDF
+  zh-CN: PDF
+export.format_gltf:
+  en: glTF
+  zh-CN: glTF
+export.size:
+  en: Size
+  zh-CN: 尺寸
+export.size_figure_4_3:
+  en: Figure 4:3
+  zh-CN: 图幅 4:3
+export.size_figure_3_2:
+  en: Figure 3:2
+  zh-CN: 图幅 3:2
+export.size_wide_16_9:
+  en: Wide 16:9
+  zh-CN: 宽屏 16:9
+export.size_square_1_1:
+  en: Square 1:1
+  zh-CN: 方形 1:1
+export.quality:
+  en: Quality
+  zh-CN: 质量
+export.quality_low:
+  en: Low
+  zh-CN: 低
+export.quality_standard:
+  en: Standard
+  zh-CN: 标准
+export.quality_high:
+  en: High
+  zh-CN: 高
+
+property.selection:
+  en: Selection
+  zh-CN: 选择
+property.selection_scene:
+  en: Scene
+  zh-CN: 场景
+property.selection_cell:
+  en: Cell
+  zh-CN: 单元
+property.objects:
+  en: Objects
+  zh-CN: 对象
+property.layers:
+  en: Layers
+  zh-CN: 图层
+property.layer:
+  en: Layer
+  zh-CN: 图层
+property.datatype:
+  en: Datatype
+  zh-CN: 数据类型
+property.file:
+  en: File
+  zh-CN: 文件
+property.cell:
+  en: Cell
+  zh-CN: 单元
+property.no_component_selected:
+  en: Select an item to view properties
+  zh-CN: 请选择一个物体以查看属性
+property.basic:
+  en: Basic
+  zh-CN: 基本
+property.display:
+  en: Display
+  zh-CN: 显示
+property.name:
+  en: Name
+  zh-CN: 名称
+property.visible:
+  en: Visible
+  zh-CN: 可见
+property.reset:
+  en: Reset
+  zh-CN: 重置
+property.color:
+  en: Color
+  zh-CN: 颜色
+property.brightness:
+  en: Brightness
+  zh-CN: 亮度
+property.bounds:
+  en: Bounds
+  zh-CN: 边界
+property.x_min:
+  en: X min
+  zh-CN: X 最小
+property.x_max:
+  en: X max
+  zh-CN: X 最大
+property.y_min:
+  en: Y min
+  zh-CN: Y 最小
+property.y_max:
+  en: Y max
+  zh-CN: Y 最大
+property.z_min:
+  en: Z min
+  zh-CN: Z 最小
+property.z_max:
+  en: Z max
+  zh-CN: Z 最大
+property.x_min_prefix:
+  en: "X min "
+  zh-CN: "X 最小 "
+property.x_max_prefix:
+  en: "X max "
+  zh-CN: "X 最大 "
+property.y_min_prefix:
+  en: "Y min "
+  zh-CN: "Y 最小 "
+property.y_max_prefix:
+  en: "Y max "
+  zh-CN: "Y 最大 "
+property.z_min_prefix:
+  en: "Z min "
+  zh-CN: "Z 最小 "
+property.z_max_prefix:
+  en: "Z max "
+  zh-CN: "Z 最大 "
+
+status.ready:
+  en: Ready
+  zh-CN: 就绪
+status.import_failed:
+  en: "Import failed: %{error}"
+  zh-CN: "导入失败：%{error}"
+status.imported_gds:
+  en: "Imported %{name}: %{count} layer objects"
+  zh-CN: "已导入 %{name}：%{count} 个图层对象"
+status.opened:
+  en: "Opened %{name}"
+  zh-CN: "已打开 %{name}"
+status.open_failed:
+  en: "Open failed: %{error}"
+  zh-CN: "打开失败：%{error}"
+status.exported:
+  en: "Exported %{name}"
+  zh-CN: "已导出 %{name}"
+status.exporting:
+  en: "Exporting %{name}"
+  zh-CN: "正在导出 %{name}"
+status.export_failed:
+  en: "Export failed: %{error}"
+  zh-CN: "导出失败：%{error}"
+status.create_baseplate_failed:
+  en: "Create baseplate failed: %{error}"
+  zh-CN: "创建基底失败：%{error}"
+status.created_baseplate:
+  en: Created baseplate
+  zh-CN: 已创建基底
+status.deleted_object:
+  en: Deleted object
+  zh-CN: 已删除对象
+status.deleted_cell:
+  en: Deleted cell
+  zh-CN: 已删除单元
+status.undid:
+  en: Undid last action
+  zh-CN: 已撤销上一步操作
+status.changed_cell_visibility:
+  en: Changed cell visibility
+  zh-CN: 已修改单元可见性
+status.language_changed:
+  en: Language updated
+  zh-CN: 语言已更新
+status.object_count:
+  en: "Objects: %{count}"
+  zh-CN: "对象：%{count}"
+status.export_mapped:
+  en: "%{format} export is mapped; renderer-backed output comes next"
+  zh-CN: "%{format} 导出流程已接入；下一步实现渲染器输出"
+
+tooltip.collapse:
+  en: Collapse
+  zh-CN: 折叠
+tooltip.expand:
+  en: Expand
+  zh-CN: 展开
+tooltip.hide:
+  en: Hide
+  zh-CN: 隐藏
+tooltip.show:
+  en: Show
+  zh-CN: 显示
+
+viewport.empty:
+  en: Import a GDS file or create a baseplate
+  zh-CN: 导入 GDS 文件或创建基底

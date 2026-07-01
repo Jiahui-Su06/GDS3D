@@ -1,0 +1,32 @@
+[package]
+name = "gds3d"
+version = "0.1.0"
+edition = "2024"
+description = "A 3D visualization editor for GDS layouts."
+license = "MIT"
+
+[workspace]
+members = ["src/viewport"]
+resolver = "3"
+
+[dependencies]
+anyhow = "1"
+crc32fast = "1.5"
+eframe = { version = "0.35", default-features = false, features = [
+    "accesskit",
+    "default_fonts",
+    "wgpu",
+    "wayland",
+    "x11",
+] }
+gdsii = "0.2"
+gds3d-viewport = { path = "src/viewport" }
+flate2 = "1.1"
+indexmap = { version = "2", features = ["serde"] }
+lucide-icons = "1.22"
+printpdf = { version = "0.9", features = ["png"] }
+rfd = "0.17"
+rust-i18n = "4.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }

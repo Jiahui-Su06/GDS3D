@@ -1,0 +1,9 @@
+[target.'cfg(windows)']
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
