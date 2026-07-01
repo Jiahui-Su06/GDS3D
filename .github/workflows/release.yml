@@ -143,7 +143,7 @@ jobs:
           cargo build --release --locked --target "${{ matrix.target }}"
           New-Item -ItemType Directory -Force -Path target/release | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/$env:BIN_NAME.exe" "target/release/$env:BIN_NAME.exe" -Force
-          packaging/windows/package.ps1 `
+          & ".\packaging\windows\package.ps1" `
             -Version "${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}" `
             -Arch "${{ matrix.arch }}"
 

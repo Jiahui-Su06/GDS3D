@@ -22,19 +22,18 @@ New-Item -ItemType Directory -Force -Path $PackageDir, $InstallerDir | Out-Null
 Copy-Item $Binary (Join-Path $PackageDir "gds3d.exe") -Force
 Copy-Item (Join-Path $Root "assets\icon.ico") (Join-Path $PackageDir "icon.ico") -Force
 
-$Iscc = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
-if ($null -eq $Iscc) {
+$IsccCommand = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
+if ($null -ne $IsccCommand) {
+    $IsccPath = $IsccCommand.Path
+} else {
     $IsccPath = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-    if (Test-Path $IsccPath) {
-        $Iscc = Get-Item $IsccPath
-    }
 }
-if ($null -eq $Iscc) {
+if (-not (Test-Path $IsccPath)) {
     throw "Inno Setup ISCC.exe is required"
 }
 
 $IssPath = Join-Path $ScriptDir "gds3d.iss"
-& $Iscc.FullName `
+& $IsccPath `
     "/DAppVersion=$Version" `
     "/DAppArch=$Arch" `
     "/DSourceDir=$PackageDir" `
