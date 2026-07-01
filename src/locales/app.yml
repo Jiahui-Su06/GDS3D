@@ -51,7 +51,7 @@ setting.show_axes:
   en: Show axes
   zh-CN: 显示坐标轴
 setting.ui_font_size:
-  en: font size
+  en: Font size
   zh-CN: 字体大小
 
 panel.scene:
