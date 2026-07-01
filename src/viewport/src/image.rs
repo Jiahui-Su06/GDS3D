@@ -72,7 +72,7 @@ pub(crate) fn capture_size_for_canvas(
     }
 }
 
-pub(crate) fn center_on_canvas(
+pub(crate) fn fit_on_canvas(
     canvas_width: u32,
     canvas_height: u32,
     image_width: u32,
@@ -97,6 +97,12 @@ pub(crate) fn center_on_canvas(
         return Err("image buffer has invalid length".to_owned());
     }
 
+    let (scaled_width, scaled_height) = scaled_size(
+        canvas_width_usize,
+        canvas_height_usize,
+        image_width_usize,
+        image_height_usize,
+    );
     let canvas_stride = canvas_width_usize
         .checked_mul(4)
         .ok_or_else(|| "canvas row is too large".to_owned())?;
@@ -104,20 +110,89 @@ pub(crate) fn center_on_canvas(
         .checked_mul(canvas_height_usize)
         .ok_or_else(|| "canvas is too large".to_owned())?;
     let mut canvas = vec![255_u8; canvas_size];
-    let x_offset = (canvas_width_usize.saturating_sub(image_width_usize)) / 2;
-    let y_offset = (canvas_height_usize.saturating_sub(image_height_usize)) / 2;
+    let x_offset = (canvas_width_usize - scaled_width) / 2;
+    let y_offset = (canvas_height_usize - scaled_height) / 2;
 
-    for row in 0..image_height_usize {
-        let src_start = row * image_stride;
-        let src_end = src_start + image_stride;
-        let dst_start = (row + y_offset) * canvas_stride + x_offset * 4;
-        let dst_end = dst_start + image_stride;
-        if dst_end > canvas.len() {
-            return Err("image does not fit on export canvas".to_owned());
+    for dst_y in 0..scaled_height {
+        let dst_row = (dst_y + y_offset) * canvas_stride;
+        for dst_x in 0..scaled_width {
+            let dst_start = dst_row + (dst_x + x_offset) * 4;
+            canvas[dst_start..dst_start + 4].copy_from_slice(&sample_bilinear(
+                image_rgba,
+                image_width_usize,
+                image_height_usize,
+                scaled_width,
+                scaled_height,
+                dst_x,
+                dst_y,
+            ));
         }
-        canvas[dst_start..dst_end].copy_from_slice(&image_rgba[src_start..src_end]);
     }
     Ok(canvas)
+}
+
+fn sample_bilinear(
+    image_rgba: &[u8],
+    image_width: usize,
+    image_height: usize,
+    scaled_width: usize,
+    scaled_height: usize,
+    dst_x: usize,
+    dst_y: usize,
+) -> [u8; 4] {
+    let src_x = source_coord(dst_x, scaled_width, image_width);
+    let src_y = source_coord(dst_y, scaled_height, image_height);
+    let x0 = src_x.floor() as usize;
+    let y0 = src_y.floor() as usize;
+    let x1 = (x0 + 1).min(image_width - 1);
+    let y1 = (y0 + 1).min(image_height - 1);
+    let x_weight = src_x - x0 as f32;
+    let y_weight = src_y - y0 as f32;
+
+    let mut out = [0_u8; 4];
+    for (channel, value) in out.iter_mut().enumerate() {
+        let top = sample_channel(image_rgba, image_width, x0, y0, channel) * (1.0 - x_weight)
+            + sample_channel(image_rgba, image_width, x1, y0, channel) * x_weight;
+        let bottom = sample_channel(image_rgba, image_width, x0, y1, channel) * (1.0 - x_weight)
+            + sample_channel(image_rgba, image_width, x1, y1, channel) * x_weight;
+        *value = (top * (1.0 - y_weight) + bottom * y_weight)
+            .round()
+            .clamp(0.0, 255.0) as u8;
+    }
+    out
+}
+
+fn source_coord(dst: usize, dst_size: usize, src_size: usize) -> f32 {
+    if dst_size <= 1 || src_size <= 1 {
+        return 0.0;
+    }
+    let coord = (dst as f32 + 0.5) * src_size as f32 / dst_size as f32 - 0.5;
+    coord.clamp(0.0, (src_size - 1) as f32)
+}
+
+fn sample_channel(
+    image_rgba: &[u8],
+    image_width: usize,
+    x: usize,
+    y: usize,
+    channel: usize,
+) -> f32 {
+    image_rgba[(y * image_width + x) * 4 + channel] as f32
+}
+
+fn scaled_size(
+    canvas_width: usize,
+    canvas_height: usize,
+    image_width: usize,
+    image_height: usize,
+) -> (usize, usize) {
+    let width_limited_height = (canvas_width * image_height / image_width).max(1);
+    if width_limited_height <= canvas_height {
+        return (canvas_width, width_limited_height);
+    }
+
+    let height_limited_width = (canvas_height * image_width / image_height).max(1);
+    (height_limited_width, canvas_height)
 }
 
 pub(crate) fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {

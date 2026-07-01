@@ -19,6 +19,7 @@ pub(crate) fn render_view_rgba(
     state: &ViewportState,
     width: u32,
     height: u32,
+    show_axes: bool,
 ) -> Result<Vec<u8>, String> {
     if width == 0 || height == 0 {
         return Err("capture size must be non-zero".to_owned());
@@ -73,7 +74,7 @@ pub(crate) fn render_view_rgba(
     let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
 
     let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(width as f32, height as f32));
-    let request = RenderRequest::from_scene(scene, state, rect);
+    let request = RenderRequest::from_scene(scene, state, rect, show_axes);
     let screen_descriptor = egui_wgpu::ScreenDescriptor {
         size_in_pixels: [width, height],
         pixels_per_point: 1.0,

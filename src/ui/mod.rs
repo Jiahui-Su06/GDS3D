@@ -656,10 +656,27 @@ impl Gds3dApp {
             .open(&mut open)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .collapsible(false)
-            .default_width(220.0)
             .resizable(false)
+            .auto_sized()
             .show(ctx, |ui| {
-                export_combo_row(ui, t!("export.format").as_ref(), |ui| {
+                let format_label = t!("export.format");
+                let size_label = t!("export.size");
+                let quality_label = t!("export.quality");
+                let label_width = settings_label_width(
+                    ui,
+                    [
+                        format_label.as_ref(),
+                        size_label.as_ref(),
+                        quality_label.as_ref(),
+                    ],
+                );
+                let export_width = label_width
+                    + SETTINGS_COLUMN_GAP
+                    + EXPORT_CONTROL_WIDTH
+                    + EXPORT_WINDOW_PADDING;
+                ui.set_width(export_width);
+
+                export_combo_row(ui, format_label.as_ref(), label_width, |ui| {
                     egui::ComboBox::from_id_salt("export_format")
                         .selected_text(self.export_settings.format.label())
                         .show_ui(ui, |ui| {
@@ -674,7 +691,7 @@ impl Gds3dApp {
                 });
 
                 if self.export_settings.format.needs_image_size() {
-                    export_combo_row(ui, t!("export.size").as_ref(), |ui| {
+                    export_combo_row(ui, size_label.as_ref(), label_width, |ui| {
                         egui::ComboBox::from_id_salt("export_size")
                             .selected_text(self.export_settings.size_preset.label())
                             .show_ui(ui, |ui| {
@@ -687,7 +704,7 @@ impl Gds3dApp {
                                 }
                             });
                     });
-                    export_combo_row(ui, t!("export.quality").as_ref(), |ui| {
+                    export_combo_row(ui, quality_label.as_ref(), label_width, |ui| {
                         egui::ComboBox::from_id_salt("export_quality")
                             .selected_text(self.export_settings.quality.label())
                             .show_ui(ui, |ui| {
@@ -731,14 +748,20 @@ fn centered_action_buttons(ui: &mut egui::Ui, add_buttons: impl FnOnce(&mut egui
     ui.horizontal(add_buttons);
 }
 
-fn export_combo_row(ui: &mut egui::Ui, label: &str, add_control: impl FnOnce(&mut egui::Ui)) {
+fn export_combo_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    label_width: f32,
+    add_control: impl FnOnce(&mut egui::Ui),
+) {
     ui.horizontal(|ui| {
-        ui.set_min_width(200.0);
-        ui.add_sized(
-            [54.0, ui.spacing().interact_size.y],
-            egui::Label::new(label),
+        settings_label(ui, label, label_width, ui.spacing().interact_size.y);
+        ui.add_space((SETTINGS_COLUMN_GAP - ui.spacing().item_spacing.x).max(0.0));
+        ui.allocate_ui_with_layout(
+            egui::vec2(EXPORT_CONTROL_WIDTH, ui.spacing().interact_size.y),
+            egui::Layout::left_to_right(egui::Align::Center),
+            add_control,
         );
-        add_control(ui);
     });
 }
 
@@ -856,11 +879,5 @@ fn settings_label_width<'a>(ui: &egui::Ui, labels: impl IntoIterator<Item = &'a 
 }
 
 fn settings_label(ui: &mut egui::Ui, text: &str, width: f32, height: f32) {
-    ui.allocate_ui_with_layout(
-        egui::vec2(width, height),
-        egui::Layout::left_to_right(egui::Align::Center),
-        |ui| {
-            ui.label(text);
-        },
-    );
+    ui.add_sized([width, height], egui::Label::new(text));
 }

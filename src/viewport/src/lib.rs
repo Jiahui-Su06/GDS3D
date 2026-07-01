@@ -127,7 +127,7 @@ pub fn show_viewport(
     ui.painter()
         .rect_filled(rect, 0.0, Color32::from_rgb(248, 250, 252));
 
-    let request = RenderRequest::from_scene(scene, state, rect);
+    let request = RenderRequest::from_scene(scene, state, rect, state.show_axes);
     let callback = egui_wgpu::Callback::new_paint_callback(
         rect,
         renderer::ViewportCallback {
@@ -168,10 +168,16 @@ pub fn render_view_png(
     }
 
     let capture_size = image::capture_size_for_canvas(width, height, state.view_size);
-    let capture_rgba =
-        renderer::render_view_rgba(render_state, scene, state, capture_size.0, capture_size.1)?;
-    let rgba =
-        image::center_on_canvas(width, height, capture_size.0, capture_size.1, &capture_rgba)?;
+    validate_capture_size(capture_size.0, capture_size.1)?;
+    let capture_rgba = renderer::render_view_rgba(
+        render_state,
+        scene,
+        state,
+        capture_size.0,
+        capture_size.1,
+        false,
+    )?;
+    let rgba = image::fit_on_canvas(width, height, capture_size.0, capture_size.1, &capture_rgba)?;
     image::encode_png(width, height, &rgba).map_err(|err| format!("encode png: {err}"))
 }
 
@@ -191,9 +197,23 @@ pub fn render_view_rgba_canvas(
     }
 
     let capture_size = image::capture_size_for_canvas(width, height, state.view_size);
-    let capture_rgba =
-        renderer::render_view_rgba(render_state, scene, state, capture_size.0, capture_size.1)?;
-    image::center_on_canvas(width, height, capture_size.0, capture_size.1, &capture_rgba)
+    validate_capture_size(capture_size.0, capture_size.1)?;
+    let capture_rgba = renderer::render_view_rgba(
+        render_state,
+        scene,
+        state,
+        capture_size.0,
+        capture_size.1,
+        false,
+    )?;
+    image::fit_on_canvas(width, height, capture_size.0, capture_size.1, &capture_rgba)
+}
+
+fn validate_capture_size(width: u32, height: u32) -> Result<(), String> {
+    if u64::from(width) * u64::from(height) > image::RENDER_PIXELS_MAX {
+        return Err(format!("viewport capture is too large: {width} x {height}"));
+    }
+    Ok(())
 }
 
 fn handle_camera_input(ui: &egui::Ui, response: &egui::Response, state: &mut ViewportState) {
@@ -533,7 +553,12 @@ struct RenderRequest {
 }
 
 impl RenderRequest {
-    fn from_scene(scene: &ViewportScene, state: &ViewportState, rect: Rect) -> Self {
+    fn from_scene(
+        scene: &ViewportScene,
+        state: &ViewportState,
+        rect: Rect,
+        show_axes: bool,
+    ) -> Self {
         let bounds = scene_bounds(scene).unwrap_or_default();
         let mut selected_lines = Vec::new();
         for obj in &scene.objects {
@@ -545,8 +570,8 @@ impl RenderRequest {
         Self {
             scene_revision: scene.revision,
             bounds,
-            camera: CameraRequest::new(&bounds, state, rect),
-            show_axes: state.show_axes,
+            camera: CameraRequest::new(&bounds, state, rect.size(), state.view_size),
+            show_axes,
             rect,
             objects: scene.objects.clone(),
             selection: selected_lines,
@@ -630,7 +655,7 @@ struct CameraRequest {
 }
 
 impl CameraRequest {
-    fn new(bounds: &SceneBounds, state: &ViewportState, rect: Rect) -> Self {
+    fn new(bounds: &SceneBounds, state: &ViewportState, render_size: Vec2, pan_size: Vec2) -> Self {
         let center = bounds.center();
         let span = bounds.span();
         let horizontal = state.pitch.cos();
@@ -640,8 +665,8 @@ impl CameraRequest {
             state.pitch.sin(),
         );
         let (right, up, forward) = orbit_basis(state.yaw, state.pitch);
-        let pan_x = state.pan.x / rect.width().max(1.0) * span / state.zoom;
-        let pan_y = state.pan.y / rect.height().max(1.0) * span / state.zoom;
+        let pan_x = state.pan.x / pan_size.x.max(1.0) * span / state.zoom;
+        let pan_y = state.pan.y / pan_size.y.max(1.0) * span / state.zoom;
         let target = center - right * pan_x + up * pan_y;
         Self {
             eye: target + direction * span * CAMERA_DISTANCE_FACTOR,
@@ -650,7 +675,7 @@ impl CameraRequest {
             up,
             forward,
             zoom: state.zoom,
-            aspect: rect.width().max(1.0) / rect.height().max(1.0),
+            aspect: render_size.x.max(1.0) / render_size.y.max(1.0),
         }
     }
 }
@@ -1251,5 +1276,25 @@ mod tests {
         };
 
         assert!(projection.project(Vec3::new(0.0, 0.0, 0.05)).is_none());
+    }
+
+    #[test]
+    fn export_pan_is_stable() {
+        let state = ViewportState {
+            zoom: 2.0,
+            pan: Vec2::new(120.0, -60.0),
+            view_size: Vec2::new(800.0, 600.0),
+            ..Default::default()
+        };
+        let bounds = SceneBounds::default();
+
+        let viewport_camera = CameraRequest::new(&bounds, &state, state.view_size, state.view_size);
+        let export_camera =
+            CameraRequest::new(&bounds, &state, Vec2::new(1600.0, 1200.0), state.view_size);
+
+        assert!((viewport_camera.target.x - export_camera.target.x).abs() < 0.0001);
+        assert!((viewport_camera.target.y - export_camera.target.y).abs() < 0.0001);
+        assert!((viewport_camera.target.z - export_camera.target.z).abs() < 0.0001);
+        assert!((viewport_camera.aspect - export_camera.aspect).abs() < 0.0001);
     }
 }

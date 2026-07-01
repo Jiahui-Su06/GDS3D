@@ -120,7 +120,6 @@ export.quality_standard:
 export.quality_high:
   en: High
   zh-CN: 高
-
 property.selection:
   en: Selection
   zh-CN: 选择
