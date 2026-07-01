@@ -1,4 +1,6 @@
-use std::path::{Path, PathBuf};
+#[cfg(all(unix, not(target_os = "macos")))]
+use std::path::Path;
+use std::path::PathBuf;
 
 use eframe::egui::{self, FontId, TextStyle};
 
@@ -89,6 +91,7 @@ fn system_ui_font_candidates() -> Vec<PathBuf> {
     Vec::new()
 }
 
+#[cfg(unix)]
 fn path_candidates(paths: impl IntoIterator<Item = &'static str>) -> Vec<PathBuf> {
     paths.into_iter().map(PathBuf::from).collect()
 }
