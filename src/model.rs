@@ -31,7 +31,6 @@ pub struct DisplayProperties {
     pub visible: bool,
     pub color: String,
     pub brightness: f32,
-    pub opacity: f32,
     pub z_min: f32,
     pub z_max: f32,
     #[serde(default)]
@@ -43,7 +42,6 @@ pub struct DisplayDefaults {
     pub name: String,
     pub color: String,
     pub brightness: f32,
-    pub opacity: f32,
     pub z_min: f32,
     pub z_max: f32,
 }
@@ -56,7 +54,6 @@ impl DisplayProperties {
                 name: name.clone(),
                 color: "#2D6CDF".to_owned(),
                 brightness: 1.0,
-                opacity: 1.0,
                 z_min: 0.0,
                 z_max: 15.0,
             },
@@ -64,7 +61,6 @@ impl DisplayProperties {
             visible: true,
             color: "#2D6CDF".to_owned(),
             brightness: 1.0,
-            opacity: 1.0,
             z_min: 0.0,
             z_max: 15.0,
         }
@@ -77,7 +73,6 @@ impl DisplayProperties {
                 name: name.clone(),
                 color: "#5F6B78".to_owned(),
                 brightness: 1.0,
-                opacity: 1.0,
                 z_min: -20.0,
                 z_max: 0.0,
             },
@@ -85,7 +80,6 @@ impl DisplayProperties {
             visible: true,
             color: "#5F6B78".to_owned(),
             brightness: 1.0,
-            opacity: 1.0,
             z_min: -20.0,
             z_max: 0.0,
         }

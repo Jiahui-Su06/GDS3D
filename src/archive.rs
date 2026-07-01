@@ -159,7 +159,6 @@ fn serialize_object(obj: &SceneObject) -> Value {
                 "brightness".to_owned(),
                 Value::from(layer.display.brightness),
             );
-            payload.insert("opacity".to_owned(), Value::from(layer.display.opacity));
             payload.insert("visible".to_owned(), Value::from(layer.display.visible));
             archive_object("gds_layer", payload)
         }
@@ -183,7 +182,6 @@ fn serialize_object(obj: &SceneObject) -> Value {
                 "brightness".to_owned(),
                 Value::from(baseplate.display.brightness),
             );
-            payload.insert("opacity".to_owned(), Value::from(baseplate.display.opacity));
             payload.insert("visible".to_owned(), Value::from(baseplate.display.visible));
             archive_object("baseplate", payload)
         }

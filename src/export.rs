@@ -173,7 +173,6 @@ fn export_objects(scene: &Scene) -> anyhow::Result<Vec<ExportObject<'_>>> {
         objects.push(ExportObject {
             bounds: obj.bounds(),
             color: export_color(obj.display().color.as_str(), obj.display().brightness),
-            opacity: obj.display().opacity.clamp(0.0, 1.0),
             z_min: obj.display().z_min,
             polygons,
         });
@@ -201,7 +200,6 @@ struct ExportColor {
 struct ExportObject<'a> {
     bounds: &'a Bounds2d,
     color: ExportColor,
-    opacity: f32,
     z_min: f32,
     polygons: Option<&'a [crate::model::Polygon2d]>,
 }
@@ -319,11 +317,7 @@ fn push_svg_path(
         }
     }
     svg.push_str(" Z");
-    svg.push_str(&format!(
-        r#"" fill="{}" fill-opacity="{:.3}"/>"#,
-        color_hex(obj.color),
-        obj.opacity
-    ));
+    svg.push_str(&format!(r#"" fill="{}"/>"#, color_hex(obj.color)));
     svg.push('\n');
 }
 

@@ -47,15 +47,6 @@ pub(super) fn editable_display(
         0.05,
         display.defaults.brightness,
     );
-    edit_float_slider(
-        ui,
-        t!("property.opacity").as_ref(),
-        &mut edit.opacity,
-        &mut display.opacity,
-        0.0..=1.0,
-        0.05,
-        display.defaults.opacity,
-    );
 }
 
 pub(super) fn readonly_row(ui: &mut egui::Ui, label: &str, value: &str) {

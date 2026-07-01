@@ -172,9 +172,6 @@ property.color:
 property.brightness:
   en: Brightness
   zh-CN: 亮度
-property.opacity:
-  en: Opacity
-  zh-CN: 透明度
 property.bounds:
   en: Bounds
   zh-CN: 边界

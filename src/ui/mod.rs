@@ -803,7 +803,6 @@ fn viewport_object(obj: &SceneObject, previous: Option<&ViewportObject>) -> View
         visible: obj.is_visible(),
         color: display.color.clone(),
         brightness: display.brightness,
-        opacity: display.opacity,
         z_min: display.z_min,
         z_max: display.z_max,
         polygons,

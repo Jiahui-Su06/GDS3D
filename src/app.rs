@@ -104,7 +104,6 @@ struct PropertyEditState {
     name: String,
     color: String,
     brightness: f32,
-    opacity: f32,
     z_min: f32,
     z_max: f32,
     min_x: f32,
@@ -125,7 +124,6 @@ impl PropertyEditState {
         self.name = display.name.clone();
         self.color = display.color.clone();
         self.brightness = display.brightness;
-        self.opacity = display.opacity;
         self.z_min = display.z_min;
         self.z_max = display.z_max;
         self.min_x = bounds.min_x;
@@ -815,7 +813,6 @@ fn display_from_payload(
         visible: bool_field(payload, "visible")?,
         color: string_field(payload, "color")?,
         brightness: f32_field(payload, "brightness")?,
-        opacity: f32_field(payload, "opacity")?,
         z_min: f32_field(payload, "z_min")?,
         z_max: f32_field(payload, "z_max")?,
         defaults: model::DisplayDefaults::default(),
@@ -827,7 +824,6 @@ fn default_display(display: &DisplayProperties) -> model::DisplayDefaults {
         name: display.name.clone(),
         color: display.color.clone(),
         brightness: display.brightness,
-        opacity: display.opacity,
         z_min: display.z_min,
         z_max: display.z_max,
     }

@@ -24,6 +24,7 @@ const PNG_COMPRESSION_DEFLATE: u8 = 0;
 const PNG_FILTER_NONE: u8 = 0;
 const PNG_INTERLACE_NONE: u8 = 0;
 const RENDER_PIXELS_MAX: u64 = 64_000_000;
+const EDGE_KEY_SCALE: f32 = 1000.0;
 
 pub const RECOMMENDED_MSAA_SAMPLES: u16 = 4;
 
@@ -48,7 +49,6 @@ pub struct ViewportObject {
     pub visible: bool,
     pub color: String,
     pub brightness: f32,
-    pub opacity: f32,
     pub z_min: f32,
     pub z_max: f32,
     pub polygons: Arc<[Polygon2d]>,
@@ -593,48 +593,14 @@ impl WgpuViewport {
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("gds3d_viewport_pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[ViewportVertex::layout()],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth24Plus,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: RECOMMENDED_MSAA_SAMPLES as u32,
-                ..Default::default()
-            },
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline = create_viewport_pipeline(
+            device,
+            &shader,
+            &pipeline_layout,
+            target_format,
+            "gds3d_viewport_pipeline",
+            true,
+        );
         let overlay_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("gds3d_viewport_overlay_shader"),
             source: wgpu::ShaderSource::Wgsl(OVERLAY_SHADER.into()),
@@ -745,35 +711,18 @@ impl WgpuViewport {
 
         if self.mesh_revision != Some(request.scene_revision) {
             let mesh = request.mesh(&mut self.object_meshes);
-            self.index_count = mesh.indices.len() as u32;
-            if mesh.vertices.is_empty() || mesh.indices.is_empty() {
-                self.mesh_revision = Some(request.scene_revision);
-            } else {
-                let vertex_size = std::mem::size_of_val(mesh.vertices.as_slice()) as u64;
-                if vertex_size > self.vertex_capacity_bytes {
-                    self.vertex_capacity_bytes = next_buffer_size(vertex_size);
-                    self.vertex_buffer = create_copy_buffer(
-                        device,
-                        "gds3d_viewport_vertex_buffer",
-                        wgpu::BufferUsages::VERTEX,
-                        self.vertex_capacity_bytes,
-                    );
-                }
-                queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&mesh.vertices));
-
-                let index_size = std::mem::size_of_val(mesh.indices.as_slice()) as u64;
-                if index_size > self.index_capacity_bytes {
-                    self.index_capacity_bytes = next_buffer_size(index_size);
-                    self.index_buffer = create_copy_buffer(
-                        device,
-                        "gds3d_viewport_index_buffer",
-                        wgpu::BufferUsages::INDEX,
-                        self.index_capacity_bytes,
-                    );
-                }
-                queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&mesh.indices));
-                self.mesh_revision = Some(request.scene_revision);
-            }
+            self.index_count = upload_viewport_mesh(
+                device,
+                queue,
+                &mesh,
+                &mut self.vertex_buffer,
+                &mut self.vertex_capacity_bytes,
+                &mut self.index_buffer,
+                &mut self.index_capacity_bytes,
+                "gds3d_viewport_vertex_buffer",
+                "gds3d_viewport_index_buffer",
+            );
+            self.mesh_revision = Some(request.scene_revision);
         }
 
         let overlay = request.overlay_mesh(screen_descriptor.pixels_per_point);
@@ -833,6 +782,100 @@ impl WgpuViewport {
             render_pass.draw_indexed(0..self.overlay_index_count, 0, 0..1);
         }
     }
+}
+
+fn create_viewport_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    target_format: wgpu::TextureFormat,
+    label: &'static str,
+    depth_write_enabled: bool,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            buffers: &[ViewportVertex::layout()],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth24Plus,
+            depth_write_enabled: Some(depth_write_enabled),
+            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState {
+            count: RECOMMENDED_MSAA_SAMPLES as u32,
+            ..Default::default()
+        },
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+fn upload_viewport_mesh(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    mesh: &ViewportMesh,
+    vertex_buffer: &mut wgpu::Buffer,
+    vertex_capacity_bytes: &mut u64,
+    index_buffer: &mut wgpu::Buffer,
+    index_capacity_bytes: &mut u64,
+    vertex_label: &'static str,
+    index_label: &'static str,
+) -> u32 {
+    if mesh.vertices.is_empty() || mesh.indices.is_empty() {
+        return 0;
+    }
+
+    let vertex_size = std::mem::size_of_val(mesh.vertices.as_slice()) as u64;
+    if vertex_size > *vertex_capacity_bytes {
+        *vertex_capacity_bytes = next_buffer_size(vertex_size);
+        *vertex_buffer = create_copy_buffer(
+            device,
+            vertex_label,
+            wgpu::BufferUsages::VERTEX,
+            *vertex_capacity_bytes,
+        );
+    }
+    queue.write_buffer(vertex_buffer, 0, bytemuck::cast_slice(&mesh.vertices));
+
+    let index_size = std::mem::size_of_val(mesh.indices.as_slice()) as u64;
+    if index_size > *index_capacity_bytes {
+        *index_capacity_bytes = next_buffer_size(index_size);
+        *index_buffer = create_copy_buffer(
+            device,
+            index_label,
+            wgpu::BufferUsages::INDEX,
+            *index_capacity_bytes,
+        );
+    }
+    queue.write_buffer(index_buffer, 0, bytemuck::cast_slice(&mesh.indices));
+
+    mesh.indices.len() as u32
 }
 
 fn create_copy_buffer(
@@ -1314,32 +1357,7 @@ impl RenderRequest {
             if !object.visible {
                 continue;
             }
-            let object_key = object_mesh_key(object);
-            let color_key = object_color_key(object);
-            let object_mesh = cache
-                .entry(object.id.clone())
-                .and_modify(|cached| {
-                    if cached.key != object_key {
-                        *cached = CachedObjectMesh {
-                            key: object_key,
-                            color_key,
-                            mesh: MeshRequest::object(object),
-                        };
-                    } else if cached.color_key != color_key {
-                        cached.mesh.set_color(parse_hex_color(
-                            &object.color,
-                            object.brightness,
-                            object.opacity,
-                        ));
-                        cached.color_key = color_key;
-                    }
-                })
-                .or_insert_with(|| CachedObjectMesh {
-                    key: object_key,
-                    color_key,
-                    mesh: MeshRequest::object(object),
-                });
-            mesh.append(&object_mesh.mesh, object.z_min, object.z_max);
+            append_object_mesh(cache, &mut mesh, object);
         }
         mesh
     }
@@ -1357,6 +1375,39 @@ impl RenderRequest {
         }
         mesh
     }
+}
+
+fn append_object_mesh(
+    cache: &mut HashMap<String, CachedObjectMesh>,
+    mesh: &mut ViewportMesh,
+    object: &ViewportObject,
+) {
+    if !object.visible {
+        return;
+    }
+
+    let object_key = object_mesh_key(object);
+    let color_key = object_color_key(object);
+    let object_mesh = cache
+        .entry(object.id.clone())
+        .and_modify(|cached| {
+            if cached.key != object_key {
+                *cached = CachedObjectMesh {
+                    key: object_key,
+                    color_key,
+                    mesh: MeshRequest::object(object),
+                };
+            } else if cached.color_key != color_key {
+                cached.mesh.set_color(object_color(object));
+                cached.color_key = color_key;
+            }
+        })
+        .or_insert_with(|| CachedObjectMesh {
+            key: object_key,
+            color_key,
+            mesh: MeshRequest::object(object),
+        });
+    mesh.append(&object_mesh.mesh, object.z_min, object.z_max);
 }
 
 #[derive(Clone, Copy)]
@@ -1471,10 +1522,11 @@ struct CachedObjectMesh {
 
 impl MeshRequest {
     fn object(obj: &ViewportObject) -> Self {
-        let color = parse_hex_color(&obj.color, obj.brightness, obj.opacity);
+        let color = object_color(obj);
         if obj.polygons.is_empty() {
             return box_mesh(&obj.bounds, 0.0, 1.0, color);
         }
+
         polygon_mesh(&obj.polygons, 0.0, 1.0, color)
     }
 
@@ -1485,6 +1537,10 @@ impl MeshRequest {
     }
 }
 
+fn object_color(obj: &ViewportObject) -> [f32; 4] {
+    parse_hex_color(&obj.color, obj.brightness)
+}
+
 fn object_mesh_key(obj: &ViewportObject) -> u64 {
     let mut hasher = DefaultHasher::new();
     obj.id.hash(&mut hasher);
@@ -1492,8 +1548,16 @@ fn object_mesh_key(obj: &ViewportObject) -> u64 {
     hash_f32(&mut hasher, obj.bounds.min_y);
     hash_f32(&mut hasher, obj.bounds.max_x);
     hash_f32(&mut hasher, obj.bounds.max_y);
-    obj.polygons.as_ptr().hash(&mut hasher);
+    hash_f32(&mut hasher, obj.z_min);
+    hash_f32(&mut hasher, obj.z_max);
     obj.polygons.len().hash(&mut hasher);
+    for polygon in obj.polygons.iter() {
+        polygon.points.len().hash(&mut hasher);
+        for point in &polygon.points {
+            hash_f32(&mut hasher, point[0]);
+            hash_f32(&mut hasher, point[1]);
+        }
+    }
     hasher.finish()
 }
 
@@ -1501,7 +1565,6 @@ fn object_color_key(obj: &ViewportObject) -> u64 {
     let mut hasher = DefaultHasher::new();
     obj.color.hash(&mut hasher);
     hash_f32(&mut hasher, obj.brightness);
-    hash_f32(&mut hasher, obj.opacity);
     hasher.finish()
 }
 
@@ -1711,14 +1774,22 @@ fn polygon_mesh(polygons: &[Polygon2d], z_min: f32, z_max: f32, color: [f32; 4])
     };
     let z0 = z_min.min(z_max);
     let z1 = z_min.max(z_max);
+    let edge_counts = polygon_edge_counts(polygons);
 
     for polygon in polygons {
-        append_polygon(&mut mesh, polygon, z0, z1, color);
+        append_polygon(&mut mesh, polygon, z0, z1, color, &edge_counts);
     }
     mesh
 }
 
-fn append_polygon(mesh: &mut MeshRequest, polygon: &Polygon2d, z0: f32, z1: f32, color: [f32; 4]) {
+fn append_polygon(
+    mesh: &mut MeshRequest,
+    polygon: &Polygon2d,
+    z0: f32,
+    z1: f32,
+    color: [f32; 4],
+    edge_counts: &HashMap<EdgeKey, u32>,
+) {
     let points = normalized_polygon_points(polygon);
     if points.len() < 3 {
         return;
@@ -1766,6 +1837,12 @@ fn append_polygon(mesh: &mut MeshRequest, polygon: &Polygon2d, z0: f32, z1: f32,
         let next_index = (index + 1) % points.len();
         let a = points[index];
         let b = points[next_index];
+        let Some(edge_key) = edge_key(a, b) else {
+            continue;
+        };
+        if edge_counts.get(&edge_key).copied().unwrap_or(0) > 1 {
+            continue;
+        }
         let edge = Vec3::new(b[0] - a[0], b[1] - a[1], 0.0);
         if edge.length() <= f32::EPSILON {
             continue;
@@ -1783,6 +1860,59 @@ fn append_polygon(mesh: &mut MeshRequest, polygon: &Polygon2d, z0: f32, z1: f32,
             color,
         );
     }
+}
+
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+struct EdgeKey {
+    a: PointKey,
+    b: PointKey,
+}
+
+#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct PointKey {
+    x: i64,
+    y: i64,
+}
+
+fn polygon_edge_counts(polygons: &[Polygon2d]) -> HashMap<EdgeKey, u32> {
+    let mut counts = HashMap::new();
+    for polygon in polygons {
+        let points = normalized_polygon_points(polygon);
+        if points.len() < 3 {
+            continue;
+        }
+        for index in 0..points.len() {
+            let next_index = (index + 1) % points.len();
+            if let Some(key) = edge_key(points[index], points[next_index]) {
+                let count = counts.entry(key).or_insert(0_u32);
+                *count = count.saturating_add(1);
+            }
+        }
+    }
+    counts
+}
+
+fn edge_key(a: [f32; 2], b: [f32; 2]) -> Option<EdgeKey> {
+    let a = point_key(a)?;
+    let b = point_key(b)?;
+    if a == b {
+        return None;
+    }
+    if a <= b {
+        Some(EdgeKey { a, b })
+    } else {
+        Some(EdgeKey { a: b, b: a })
+    }
+}
+
+fn point_key(point: [f32; 2]) -> Option<PointKey> {
+    if !point[0].is_finite() || !point[1].is_finite() {
+        return None;
+    }
+    Some(PointKey {
+        x: (point[0] * EDGE_KEY_SCALE).round() as i64,
+        y: (point[1] * EDGE_KEY_SCALE).round() as i64,
+    })
 }
 
 fn normalized_polygon_points(polygon: &Polygon2d) -> Vec<[f32; 2]> {
@@ -1868,7 +1998,7 @@ fn selection_lines(obj: &ViewportObject, scene_bounds: &SceneBounds) -> Vec<Line
         .collect()
 }
 
-fn parse_hex_color(value: &str, brightness: f32, opacity: f32) -> [f32; 4] {
+fn parse_hex_color(value: &str, brightness: f32) -> [f32; 4] {
     let hex = value.trim().trim_start_matches('#');
     if hex.len() != 6 {
         return opaque_color(45, 108, 223);
@@ -1883,7 +2013,7 @@ fn parse_hex_color(value: &str, brightness: f32, opacity: f32) -> [f32; 4] {
         channel_to_float(((rgb >> 16) & 0xff) as f32 * scale),
         channel_to_float(((rgb >> 8) & 0xff) as f32 * scale),
         channel_to_float((rgb & 0xff) as f32 * scale),
-        opacity.clamp(0.08, 1.0),
+        1.0,
     ]
 }
 
@@ -1973,3 +2103,35 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     return input.color;
 }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skips_side_wall_for_shared_polygon_edge() {
+        let polygons = [
+            Polygon2d {
+                points: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            },
+            Polygon2d {
+                points: vec![[1.0, 0.0], [2.0, 0.0], [2.0, 1.0], [1.0, 1.0]],
+            },
+        ];
+
+        let mesh = polygon_mesh(&polygons, 0.0, 1.0, opaque_color(10, 20, 30));
+
+        assert_eq!(mesh.indices.len(), 60);
+    }
+
+    #[test]
+    fn keeps_side_wall_for_single_polygon_edge() {
+        let polygons = [Polygon2d {
+            points: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        }];
+
+        let mesh = polygon_mesh(&polygons, 0.0, 1.0, opaque_color(10, 20, 30));
+
+        assert_eq!(mesh.indices.len(), 36);
+    }
+}
