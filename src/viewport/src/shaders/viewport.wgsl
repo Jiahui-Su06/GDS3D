@@ -23,24 +23,23 @@ struct VertexOutput {
 
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
+    let rel = input.position - view.center.xyz;
     let eye_rel = input.position - view.eye.xyz;
     let half_width = max(view.params.x, 0.001);
     let half_height = max(view.params.y, 0.001);
     let near = view.params.z;
     let far = max(view.params.w, near + 1.0);
-    let view_z = dot(eye_rel, view.forward.xyz);
-    let depth = (view_z - near) / (far - near);
-    let focal_distance = max(dot(view.center.xyz - view.eye.xyz, view.forward.xyz), near);
+    let depth = (dot(eye_rel, view.forward.xyz) - near) / (far - near);
 
     let light = normalize(vec3<f32>(0.35, -0.45, 0.82));
     let intensity = 0.58 + max(dot(normalize(input.normal), light), 0.0) * 0.42;
 
     var out: VertexOutput;
     out.position = vec4<f32>(
-        dot(eye_rel, view.right.xyz) * focal_distance / half_width,
-        dot(eye_rel, view.up.xyz) * focal_distance / half_height,
-        depth * view_z,
-        view_z,
+        dot(rel, view.right.xyz) / half_width,
+        dot(rel, view.up.xyz) / half_height,
+        depth,
+        1.0,
     );
     out.color = vec4<f32>(input.color.rgb * intensity, input.color.a);
     return out;

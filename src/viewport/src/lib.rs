@@ -710,22 +710,15 @@ impl Projection {
     }
 
     fn project(&self, point: Vec3) -> Option<ProjectedPoint> {
+        let rel = point - self.center;
         let eye_rel = point - self.eye;
-        let view_z = eye_rel.dot(self.forward);
-        if view_z <= self.near {
+        let depth = (eye_rel.dot(self.forward) - self.near) / (self.far - self.near);
+        if !depth.is_finite() {
             return None;
         }
-        let depth = (view_z - self.near) / (self.far - self.near);
-        let focal_distance = (self.center - self.eye).dot(self.forward).max(self.near);
-        let perspective = focal_distance / view_z;
-        if !depth.is_finite() || !perspective.is_finite() {
-            return None;
-        }
-        let half_width = self.half_width.max(0.001);
-        let half_height = self.half_height.max(0.001);
         Some(ProjectedPoint {
-            x: eye_rel.dot(self.right) * perspective / half_width,
-            y: eye_rel.dot(self.up) * perspective / half_height,
+            x: rel.dot(self.right) / self.half_width.max(0.001),
+            y: rel.dot(self.up) / self.half_height.max(0.001),
         })
     }
 }
@@ -1230,7 +1223,7 @@ mod tests {
     }
 
     #[test]
-    fn perspective_shrinks_far_points() {
+    fn orthographic_keeps_far_points_same_size() {
         let projection = Projection {
             center: Vec3::new(0.0, 0.0, 10.0),
             eye: Vec3::new(0.0, 0.0, 0.0),
@@ -1250,13 +1243,12 @@ mod tests {
             .project(Vec3::new(1.0, 0.0, 20.0))
             .expect("project far point");
 
-        assert!(near.x > far.x);
         assert!((near.x - 0.2).abs() < 0.0001);
-        assert!((far.x - 0.1).abs() < 0.0001);
+        assert!((far.x - 0.2).abs() < 0.0001);
     }
 
     #[test]
-    fn perspective_rejects_near_plane() {
+    fn orthographic_projects_near_plane() {
         let projection = Projection {
             center: Vec3::new(0.0, 0.0, 10.0),
             eye: Vec3::new(0.0, 0.0, 0.0),
@@ -1269,7 +1261,7 @@ mod tests {
             far: 100.0,
         };
 
-        assert!(projection.project(Vec3::new(0.0, 0.0, 0.05)).is_none());
+        assert!(projection.project(Vec3::new(0.0, 0.0, 0.05)).is_some());
     }
 
     #[test]
