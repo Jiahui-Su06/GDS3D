@@ -1,0 +1,19 @@
+Source Han Sans SC Regular subset
+
+Upstream project: https://github.com/adobe-fonts/source-han-sans
+Upstream version: 2.005R
+Upstream file: OTF/SimplifiedChinese/SourceHanSansSC-Regular.otf
+Upstream SHA-256: f1d8611151880c6c336aabeac4640ef434fa13cbfbf1ffe82d0a71b2a5637256
+
+The bundled gds3d-cjk.otf is a FontTools subset containing the
+common Simplified Chinese characters in the GB2312 byte range plus the
+Chinese characters used by shrieker. Latin glyphs are intentionally omitted;
+egui's default fonts render Latin text before falling back to this font.
+The modified font's internal family and PostScript names are "Shrieker CJK"
+and "ShriekerCJK-Regular" to comply with the Reserved Font Name requirement.
+
+Bundled subset SHA-256:
+bc1ad5b032a46f94fb34332cee9738cf3d3e5ecc0ea1049bb00600baa1dd94a8
+
+The font is licensed under the SIL Open Font License 1.1. See
+SOURCE-HAN-SANS-LICENSE.txt in this directory.

@@ -19,6 +19,8 @@ assets = [
     ["target/release/gds3d", "usr/bin/", "755"],
     ["assets/icon.png", "usr/share/pixmaps/gds3d.png", "644"],
     ["gds3d.desktop", "usr/share/applications/", "644"],
+    ["assets/fonts/SOURCE-HAN-SANS-NOTICE.txt", "usr/share/doc/gds3d/", "644"],
+    ["assets/fonts/SOURCE-HAN-SANS-LICENSE.txt", "usr/share/doc/gds3d/", "644"],
 ]
 
 [package.metadata.generate-rpm]
@@ -26,6 +28,8 @@ assets = [
     { source = "target/release/gds3d", dest = "/usr/bin/gds3d", mode = "755" },
     { source = "assets/icon.png", dest = "/usr/share/pixmaps/gds3d.png", mode = "644" },
     { source = "gds3d.desktop", dest = "/usr/share/applications/gds3d.desktop", mode = "644" },
+    { source = "assets/fonts/SOURCE-HAN-SANS-NOTICE.txt", dest = "/usr/share/licenses/gds3d/SOURCE-HAN-SANS-NOTICE.txt", mode = "644" },
+    { source = "assets/fonts/SOURCE-HAN-SANS-LICENSE.txt", dest = "/usr/share/licenses/gds3d/SOURCE-HAN-SANS-LICENSE.txt", mode = "644" },
 ]
 
 [workspace]
